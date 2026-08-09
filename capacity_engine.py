@@ -388,9 +388,11 @@ def summarize(df: pd.DataFrame, inputs: ScenarioInputs) -> dict:
 @dataclass
 class PodConfig:
     pod_name: str                     # e.g. "Enterprise", "Mid-Market", "SMB", "Inbound"
-    num_aes: int                      # dynamic variable — set per pod
-    num_bdrs: int                     # dynamic variable — 0 for Inbound (self-serve/PLG, no outbound)
+    num_aes: int                      # NEW AE hires only — phased, normal ramp curve
+    num_bdrs: int                     # NEW BDR hires only — phased, normal ramp curve
     ae_comp_template: RoleComp        # quota + OTE structure, shared by all AEs in this pod
+    num_existing_aes: int = 0         # already on the team — fully ramped, present from month 0
+    num_existing_bdrs: int = 0        # same, for BDRs
     bdr_comp_template: Optional[RoleComp] = None   # None if num_bdrs == 0
     marketing: MarketingFunnel = None
     avg_deal_size: float = 0.0
@@ -425,8 +427,8 @@ class PodConfig:
     # (e.g. self-serve/Inbound typically doesn't).
 
     def __post_init__(self):
-        if self.num_bdrs > 0 and self.bdr_comp_template is None:
-            raise ValueError(f"Pod '{self.pod_name}' has {self.num_bdrs} BDRs but no bdr_comp_template.")
+        if (self.num_bdrs > 0 or self.num_existing_bdrs > 0) and self.bdr_comp_template is None:
+            raise ValueError(f"Pod '{self.pod_name}' has BDRs but no bdr_comp_template.")
 
     def _phased_hire_months(self, count: int) -> list:
         """Default hiring plan: 1 hire every `hiring_cadence_months`, starting month 0.
@@ -440,24 +442,55 @@ class PodConfig:
         if len(ae_hires) != self.num_aes or len(bdr_hires) != self.num_bdrs:
             raise ValueError(f"Pod '{self.pod_name}': hire_months length must match num_aes/num_bdrs.")
 
-        reps = [
+        # Existing team members: already on the team, fully productive from
+        # month 0 — a single-entry ramp schedule means productivity_in_month(0)
+        # returns 1.0 immediately, no ramp-up period. This is the capacity-side
+        # counterpart to Existing Book: representing a team that already
+        # exists, not one starting from zero.
+        instant_ramp = RampSchedule(monthly_productivity=[1.0])
+
+        existing_reps = [
             SalesRep(
-                name=f"{self.pod_name}-AE-{i+1}",
+                name=f"{self.pod_name}-AE-existing-{i+1}",
+                hire_month=0,
+                comp=self.ae_comp_template,
+                self_sourced_sqls_per_month=self.ae_self_sourced_sqls_per_month,
+                ramp=instant_ramp,
+            )
+            for i in range(self.num_existing_aes)
+        ]
+        new_reps = [
+            SalesRep(
+                name=f"{self.pod_name}-AE-new-{i+1}",
                 hire_month=ae_hires[i],
                 comp=self.ae_comp_template,
                 self_sourced_sqls_per_month=self.ae_self_sourced_sqls_per_month,
             )
             for i in range(self.num_aes)
         ]
-        bdrs = [
+        reps = existing_reps + new_reps
+
+        existing_bdrs = [
             BDR(
-                name=f"{self.pod_name}-BDR-{i+1}",
+                name=f"{self.pod_name}-BDR-existing-{i+1}",
+                hire_month=0,
+                monthly_sql_quota=self.bdr_comp_template.annual_quota / 12,
+                comp=self.bdr_comp_template,
+                ramp=instant_ramp,
+            )
+            for i in range(self.num_existing_bdrs)
+        ]
+        new_bdrs = [
+            BDR(
+                name=f"{self.pod_name}-BDR-new-{i+1}",
                 hire_month=bdr_hires[i],
                 monthly_sql_quota=self.bdr_comp_template.annual_quota / 12,
                 comp=self.bdr_comp_template,
             )
             for i in range(self.num_bdrs)
         ]
+        bdrs = existing_bdrs + new_bdrs
+
         return ScenarioInputs(
             scenario_name=self.pod_name,
             num_months=num_months,

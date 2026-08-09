@@ -12,6 +12,8 @@ import plotly.graph_objects as go
 from capacity_engine import PodConfig, RoleComp, MarketingFunnel, run_scenario
 from revenue_recognition_engine import bookings_to_contracts, run_recognition, BillingFrequency
 from renewal_engine import RenewalAssumptions, run_full_lifecycle, summarize_renewals
+from existing_book_engine import load_customer_revenue_extract, derive_book_metrics, project_existing_book_runoff
+from saas_metrics import aggregate_periods
 
 st.set_page_config(page_title="Revenue Architecture Model", layout="wide")
 st.title("Revenue Architecture — Pipeline, Recognition & Renewal Model")
@@ -30,6 +32,71 @@ def wide(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# Formatting layer — every metric across every engine's output, mapped to
+# how it should actually display (currency, percent, ratio/multiplier,
+# or count). Applied to WIDE-format tables (metrics as rows) after
+# transposing, so each row gets one consistent format across all its
+# period columns. Unlisted fields (e.g. free-text like binding_constraint,
+# pod_name) pass through as plain strings.
+# ---------------------------------------------------------------------------
+_CURRENCY_FIELDS = {
+    "capacity_constrained_bookings", "demand_constrained_bookings", "theoretical_bookings", "actual_bookings",
+    "ae_cost", "bdr_cost", "total_cost_of_capacity", "new_bookings_tcv", "new_arr_booked", "arpa_new_accounts",
+    "cumulative_arr_booked", "blended_arpa_booked", "live_arr", "blended_arpa_live", "subscription_billings",
+    "subscription_revenue_recognized", "ps_fee_billings", "ps_fee_revenue_recognized", "total_billings",
+    "total_revenue_recognized", "cumulative_billings", "cumulative_revenue_recognized", "deferred_revenue_balance",
+    "implementation_backlog_value", "arr_up_for_renewal", "churned_arr", "expansion_arr", "contraction_arr",
+    "renewed_arr", "existing_book_arr", "existing_book_monthly_revenue", "existing_book_churn_dollar",
+    "existing_book_expansion_dollar", "existing_book_contraction_dollar", "new_business_live_arr", "total_arr",
+    "beginning_arr", "ending_arr", "revenue", "arpa_ending", "ltv", "other_boundary_effect",
+}
+_CURRENCY_PRECISE_FIELDS = {"cost_per_dollar_booked"}  # small $-per-$ figures, needs decimals not rounding to whole $
+_PERCENT_FIELDS = {
+    "overall_attainment_pct", "churn_rate_applied_pct", "nrr_this_cohort_pct", "nrr_pct",
+    "gross_dollar_churn_rate_pct", "logo_churn_rate_pct",
+}
+_RATIO_FIELDS = {"execution_efficiency", "seasonal_multiplier", "pipeline_coverage_ratio", "coverage_target"}
+_COUNT_FIELDS = {
+    "active_aes", "active_bdrs", "new_accounts_signed", "cumulative_accounts_signed", "live_accounts",
+    "implementation_backlog_count", "logos_up_for_renewal", "month", "customers_matched", "customers_churned",
+    "base_logo_count",
+}
+_COUNT_DECIMAL_FIELDS = {  # counts that are legitimately fractional ("expected value", not a literal integer)
+    "logos_retained_expected", "existing_book_logo_count", "existing_book_logos_churned", "beginning_logos",
+    "ending_logos", "new_logos", "churned_logos", "sqls_marketing", "sqls_bdr", "sqls_ae_self_sourced",
+}
+
+
+def _format_cell(value, field_name: str) -> str:
+    if pd.isna(value):
+        return "—"
+    if field_name in _CURRENCY_FIELDS:
+        return f"${value:,.0f}"
+    if field_name in _CURRENCY_PRECISE_FIELDS:
+        return f"${value:,.3f}"
+    if field_name in _PERCENT_FIELDS:
+        return f"{value:.1f}%"
+    if field_name in _RATIO_FIELDS:
+        return f"{value:.2f}x"
+    if field_name in _COUNT_FIELDS:
+        return f"{value:,.0f}"
+    if field_name in _COUNT_DECIMAL_FIELDS:
+        return f"{value:,.1f}"
+    return str(value)
+
+
+def style_wide(df: pd.DataFrame) -> pd.DataFrame:
+    """Applies proper per-metric formatting to a WIDE table (metrics as rows,
+    periods as columns) — the shape produced by wide() or .set_index('period').T."""
+    if len(df) == 0:
+        return df
+    formatted = df.copy().astype(object)
+    for row_label in formatted.index:
+        formatted.loc[row_label] = formatted.loc[row_label].apply(lambda v: _format_cell(v, row_label))
+    return formatted
+
+
+# ---------------------------------------------------------------------------
 # Sidebar input renderer — used for both single-scenario mode and each side
 # of a comparison. `key` namespaces every widget so two instances can run
 # side by side without Streamlit key collisions.
@@ -37,12 +104,55 @@ def wide(df: pd.DataFrame) -> pd.DataFrame:
 def render_inputs(key: str, label: str) -> dict:
     st.sidebar.subheader(label)
 
-    pod_name = st.sidebar.text_input("Pod name", "MidMarket", key=f"{key}_pod_name")
+    pod_preset = st.sidebar.selectbox(
+        "Pod name", ["SMB", "Mid-Market", "Enterprise", "Inbound", "Other (custom)"],
+        index=1, key=f"{key}_pod_preset",
+    )
+    if pod_preset == "Other (custom)":
+        pod_name = st.sidebar.text_input("Custom pod name", "MidMarket", key=f"{key}_pod_name_custom")
+    else:
+        pod_name = pod_preset
 
-    st.sidebar.caption("Team")
-    num_aes = st.sidebar.number_input("Number of AEs", 0, 50, 3, key=f"{key}_num_aes")
-    num_bdrs = st.sidebar.number_input("Number of BDRs", 0, 50, 2, key=f"{key}_num_bdrs")
-    hiring_cadence = st.sidebar.number_input("Hiring cadence (months between hires)", 1, 12, 3, key=f"{key}_cadence")
+    st.sidebar.caption("Team — Existing (already on the team, fully productive from month 1)")
+    num_existing_aes = st.sidebar.number_input("Existing AEs", 0, 100, 0, key=f"{key}_existing_aes")
+    num_existing_bdrs = st.sidebar.number_input("Existing BDRs", 0, 100, 0, key=f"{key}_existing_bdrs")
+
+    st.sidebar.caption("Team — New Hires (ramp normally over 3 months)")
+    num_aes = st.sidebar.number_input("New AE hires", 0, 50, 3, key=f"{key}_num_aes")
+    num_bdrs = st.sidebar.number_input("New BDR hires", 0, 50, 2, key=f"{key}_num_bdrs")
+    hiring_cadence = st.sidebar.number_input("Default hiring cadence (months between hires)", 1, 12, 3, key=f"{key}_cadence")
+
+    custom_ae_schedule_raw = st.sidebar.text_input(
+        "Custom AE hire-month schedule (optional, comma-separated)", "",
+        key=f"{key}_ae_custom_sched",
+        help=f"e.g. '0,0,6,6' to hire 2 now and 2 more in month 6. Leave blank to use the "
+             f"default cadence above. Must have exactly {num_aes} entries if used.",
+    )
+    custom_bdr_schedule_raw = st.sidebar.text_input(
+        "Custom BDR hire-month schedule (optional, comma-separated)", "",
+        key=f"{key}_bdr_custom_sched",
+        help=f"Same format as above. Must have exactly {num_bdrs} entries if used.",
+    )
+
+    ae_hire_months = None
+    if custom_ae_schedule_raw.strip():
+        try:
+            ae_hire_months = [int(x.strip()) for x in custom_ae_schedule_raw.split(",")]
+            if len(ae_hire_months) != num_aes:
+                st.sidebar.error(f"Custom AE schedule has {len(ae_hire_months)} entries, need {num_aes}. Using default cadence instead.")
+                ae_hire_months = None
+        except ValueError:
+            st.sidebar.error("Couldn't parse custom AE schedule (use whole numbers separated by commas). Using default cadence instead.")
+
+    bdr_hire_months = None
+    if custom_bdr_schedule_raw.strip():
+        try:
+            bdr_hire_months = [int(x.strip()) for x in custom_bdr_schedule_raw.split(",")]
+            if len(bdr_hire_months) != num_bdrs:
+                st.sidebar.error(f"Custom BDR schedule has {len(bdr_hire_months)} entries, need {num_bdrs}. Using default cadence instead.")
+                bdr_hire_months = None
+        except ValueError:
+            st.sidebar.error("Couldn't parse custom BDR schedule (use whole numbers separated by commas). Using default cadence instead.")
 
     st.sidebar.caption("AE Compensation & Quota")
     ae_base = st.sidebar.number_input("AE annual base ($)", 0, 500_000, 95_000, step=5000, key=f"{key}_ae_base")
@@ -89,6 +199,8 @@ def render_inputs(key: str, label: str) -> dict:
 
     return dict(
         pod_name=pod_name, num_aes=num_aes, num_bdrs=num_bdrs, hiring_cadence=hiring_cadence,
+        num_existing_aes=num_existing_aes, num_existing_bdrs=num_existing_bdrs,
+        ae_hire_months=ae_hire_months, bdr_hire_months=bdr_hire_months,
         ae_base=ae_base, ae_variable=ae_variable, ae_quota=ae_quota,
         bdr_base=bdr_base, bdr_variable=bdr_variable, bdr_monthly_sql_quota=bdr_monthly_sql_quota,
         monthly_leads=monthly_leads, lead_to_mql=lead_to_mql, mql_to_sql=mql_to_sql,
@@ -109,9 +221,10 @@ def render_inputs(key: str, label: str) -> dict:
 def run_full_model(cfg: dict, num_months: int):
     pod = PodConfig(
         pod_name=cfg["pod_name"], num_aes=int(cfg["num_aes"]), num_bdrs=int(cfg["num_bdrs"]),
+        num_existing_aes=int(cfg["num_existing_aes"]), num_existing_bdrs=int(cfg["num_existing_bdrs"]),
         ae_comp_template=RoleComp(annual_base=cfg["ae_base"], annual_variable_at_100pct=cfg["ae_variable"], annual_quota=cfg["ae_quota"]),
         bdr_comp_template=RoleComp(annual_base=cfg["bdr_base"], annual_variable_at_100pct=cfg["bdr_variable"],
-                                    annual_quota=cfg["bdr_monthly_sql_quota"] * 12) if cfg["num_bdrs"] > 0 else None,
+                                    annual_quota=cfg["bdr_monthly_sql_quota"] * 12) if (cfg["num_bdrs"] > 0 or cfg["num_existing_bdrs"] > 0) else None,
         marketing=MarketingFunnel(monthly_leads=cfg["monthly_leads"], lead_to_mql_rate=cfg["lead_to_mql"], mql_to_sql_rate=cfg["mql_to_sql"]),
         avg_deal_size=cfg["avg_deal_size"], win_rate_marketing_sourced=cfg["win_marketing"],
         win_rate_bdr_sourced=cfg["win_bdr"], win_rate_ae_self_sourced=cfg["win_self"],
@@ -119,6 +232,7 @@ def run_full_model(cfg: dict, num_months: int):
         hiring_cadence_months=int(cfg["hiring_cadence"]), contract_term_months=int(cfg["contract_term"]),
         implementation_lag_months=int(cfg["implementation_lag"]), professional_services_fee_pct_of_arr=cfg["ps_fee_pct"],
         seasonality_pattern=cfg["seasonality_pattern"],
+        ae_hire_months=cfg.get("ae_hire_months"), bdr_hire_months=cfg.get("bdr_hire_months"),
     )
     phase1_df = run_scenario(pod.build_scenario(num_months))
     initial_contracts = bookings_to_contracts(pod, phase1_df, billing_frequency=BillingFrequency.ANNUAL_UPFRONT)
@@ -172,6 +286,71 @@ num_months = st.slider("Scenario length (months)", 6, 48, 24)
 # ===========================================================================
 if mode == "Single Scenario":
     cfg = render_inputs("s", "Scenario Inputs")
+
+    # -----------------------------------------------------------------
+    # EXISTING CUSTOMER BOOK (optional) — top-line ARR/revenue overlay,
+    # NOT run through the Contract engine (no individual contract dates
+    # available from a revenue extract). Runs alongside new business.
+    # -----------------------------------------------------------------
+    st.sidebar.subheader("Existing Customer Book (optional)")
+    include_existing = st.sidebar.checkbox("Include existing customer book", value=False)
+
+    existing_book_df = None
+    derived_metrics = None
+
+    if include_existing:
+        uploaded = st.sidebar.file_uploader("Upload customer revenue extract (CSV or Excel)", type=["csv", "xlsx"])
+        st.sidebar.caption("Long format expected: one row per customer per month (customer, month, revenue). "
+                            "At least 13 months of history needed to derive a trailing-12-month comparison.")
+
+        if uploaded is not None:
+            try:
+                raw_df = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
+            except Exception as e:
+                st.sidebar.error(f"Couldn't read file: {e}")
+                raw_df = None
+
+            if raw_df is not None:
+                st.sidebar.caption("Map your columns:")
+                cols = list(raw_df.columns)
+                customer_col = st.sidebar.selectbox("Customer column", cols, index=0)
+                month_col = st.sidebar.selectbox("Month column", cols, index=min(1, len(cols) - 1))
+                revenue_col = st.sidebar.selectbox("Revenue column", cols, index=min(2, len(cols) - 1))
+                lookback = st.sidebar.number_input("Lookback window (months)", 1, 24, 12)
+
+                try:
+                    matrix = load_customer_revenue_extract(raw_df, customer_col, month_col, revenue_col)
+                    derived_metrics = derive_book_metrics(matrix, lookback_months=lookback)
+                except Exception as e:
+                    st.sidebar.error(f"Couldn't derive metrics: {e}")
+                    derived_metrics = None
+
+                if derived_metrics is not None:
+                    st.sidebar.success(
+                        f"Derived NRR: {derived_metrics.nrr_pct}% "
+                        f"({derived_metrics.customers_matched} matched, {derived_metrics.customers_churned} churned)"
+                    )
+                    override = st.sidebar.checkbox("Override derived rates manually", value=False)
+                    if override:
+                        eb_churn = st.sidebar.slider("Existing book — annual churn", 0.0, 1.0, derived_metrics.implied_annual_churn_rate or 0.10)
+                        eb_expansion = st.sidebar.slider("Existing book — annual expansion", 0.0, 1.0, derived_metrics.implied_annual_expansion_rate or 0.10)
+                        eb_contraction = st.sidebar.slider("Existing book — annual contraction", 0.0, 1.0, derived_metrics.implied_annual_contraction_rate or 0.02)
+                    else:
+                        eb_churn = derived_metrics.implied_annual_churn_rate or 0.0
+                        eb_expansion = derived_metrics.implied_annual_expansion_rate or 0.0
+                        eb_contraction = derived_metrics.implied_annual_contraction_rate or 0.0
+
+                    existing_book_df = project_existing_book_runoff(
+                        base_arr=derived_metrics.base_arr,
+                        annual_churn_rate=eb_churn,
+                        annual_expansion_rate=eb_expansion,
+                        annual_contraction_rate=eb_contraction,
+                        num_months=num_months,
+                    )
+
+    st.sidebar.subheader("SaaS Metrics Dashboard")
+    gross_margin_pct = st.sidebar.slider("Gross margin % (for LTV)", 0.0, 1.0, 0.75)
+
     try:
         result = run_full_model(cfg, num_months)
     except Exception as e:
@@ -180,9 +359,78 @@ if mode == "Single Scenario":
 
     phase1_df, phase2_df, renewals_df = result["phase1_df"], result["phase2_df"], result["renewals_df"]
 
-    tab1, tab2, tab3, tab4 = st.tabs(["📈 Pipeline & Capacity", "💰 Revenue Recognition", "🔄 Renewals & NRR", "📋 Raw Data"])
+    eb_base_arr = derived_metrics.base_arr if derived_metrics is not None else 0.0
+    eb_base_logos = derived_metrics.base_logo_count if derived_metrics is not None else 0
 
-    with tab1:
+    tab_names = ["📐 SaaS Metrics Dashboard", "📈 Pipeline & Capacity", "💰 Revenue Recognition", "🔄 Renewals & NRR", "📋 Raw Data"]
+    if existing_book_df is not None:
+        tab_names.insert(1, "🏢 Total Company")
+    tabs = st.tabs(tab_names)
+    tab_offset = 1  # SaaS Metrics Dashboard is always tab 0 now
+    if existing_book_df is not None:
+        tab_offset = 2
+
+    with tabs[0]:
+        st.subheader("Annual View")
+        st.caption(
+            "Every metric traces to the model's own already-verified monthly output. "
+            "'New ARR' is ARR that went LIVE this period (by go-live date), not ARR signed — "
+            "those differ once implementation lag is involved. LTV is annual-only: a single "
+            "quarter's churn rate is too noisy to use as an LTV input."
+        )
+        annual = aggregate_periods(
+            phase2_df, renewals_df, existing_book_df, result["all_contracts"], num_months,
+            period_months=12, gross_margin_pct=gross_margin_pct,
+            existing_book_base_arr=eb_base_arr, existing_book_base_logos=eb_base_logos,
+        )
+        st.dataframe(style_wide(annual.set_index("period").T), use_container_width=True)
+
+        st.subheader("Quarterly Detail")
+        quarterly = aggregate_periods(
+            phase2_df, renewals_df, existing_book_df, result["all_contracts"], num_months,
+            period_months=3, existing_book_base_arr=eb_base_arr, existing_book_base_logos=eb_base_logos,
+        )
+        num_years = (num_months + 11) // 12
+        for y in range(num_years):
+            with st.expander(f"Year {y+1} — Quarterly Breakdown"):
+                year_quarters = quarterly[quarterly["period"].str.startswith(f"Y{y+1}-")]
+                if len(year_quarters) > 0:
+                    st.dataframe(style_wide(year_quarters.set_index("period").T), use_container_width=True)
+                else:
+                    st.caption("No full quarters in this range.")
+
+    if existing_book_df is not None:
+        with tabs[1]:
+            st.subheader("Total Company: Existing Book + New Business")
+            st.caption(
+                "Existing book is a top-line ARR/revenue overlay derived from your uploaded extract "
+                "(smooth monthly runoff, no individual contract dates). New business runs through the "
+                "full Bowtie engine (Phase 1-3) with real deferred revenue mechanics. The two are added "
+                "together here, not run through the same machinery — see README for why."
+            )
+            combined = pd.DataFrame({
+                "month": phase2_df["month"],
+                "existing_book_arr": existing_book_df["existing_book_arr"],
+                "new_business_live_arr": phase2_df["live_arr"],
+            })
+            combined["total_arr"] = combined["existing_book_arr"] + combined["new_business_live_arr"]
+            st.line_chart(combined.set_index("month")[["existing_book_arr", "new_business_live_arr", "total_arr"]])
+
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Existing Book — Ending ARR", f"${existing_book_df['existing_book_arr'].iloc[-1]:,.0f}")
+            col2.metric("New Business — Ending ARR", f"${phase2_df['live_arr'].iloc[-1]:,.0f}")
+            col3.metric("Total Company — Ending ARR", f"${combined['total_arr'].iloc[-1]:,.0f}")
+
+            st.subheader("Derived Book Metrics (from your extract)")
+            dcol1, dcol2, dcol3, dcol4 = st.columns(4)
+            dcol1.metric("Base ARR", f"${derived_metrics.base_arr:,.0f}")
+            dcol2.metric("Trailing-12 NRR", f"{derived_metrics.nrr_pct}%")
+            dcol3.metric("Churned ARR (TTM)", f"${derived_metrics.churned_arr:,.0f}")
+            dcol4.metric("Expansion ARR (TTM)", f"${derived_metrics.expansion_arr:,.0f}")
+
+            st.dataframe(style_wide(wide(combined)), use_container_width=True)
+
+    with tabs[0 + tab_offset]:
         st.subheader("Bookings: Capacity vs. Demand Constraint")
         st.line_chart(phase1_df.set_index("month")[["capacity_constrained_bookings", "demand_constrained_bookings", "actual_bookings"]])
         col1, col2, col3 = st.columns(3)
@@ -191,7 +439,7 @@ if mode == "Single Scenario":
         months_capacity_bound = (phase1_df["binding_constraint"] == "CAPACITY").sum()
         col3.metric("Months Capacity-Bound", f"{months_capacity_bound}/{len(phase1_df)}")
 
-    with tab2:
+    with tabs[1 + tab_offset]:
         st.subheader("Live ARR Trajectory")
         st.line_chart(phase2_df.set_index("month")[["live_arr", "cumulative_arr_booked"]])
         col1, col2, col3 = st.columns(3)
@@ -201,7 +449,7 @@ if mode == "Single Scenario":
         st.subheader("Revenue Streams")
         st.bar_chart(phase2_df.set_index("month")[["subscription_revenue_recognized", "ps_fee_revenue_recognized"]])
 
-    with tab3:
+    with tabs[2 + tab_offset]:
         st.subheader("Renewal Cohort Summary")
         if len(renewals_df) > 0:
             summary = summarize_renewals(renewals_df)
@@ -210,18 +458,18 @@ if mode == "Single Scenario":
             col2.metric("Total Renewal Events", summary['total_renewal_events'])
             col3.metric("Total Expansion ARR", f"${summary['total_expansion_arr']:,.0f}")
             st.info(summary["nrr_benchmark_check"])
-            st.dataframe(wide(renewals_df), use_container_width=True)
+            st.dataframe(style_wide(wide(renewals_df)), use_container_width=True)
         else:
             st.info("No renewal events occurred — scenario length may be shorter than the contract term.")
 
-    with tab4:
+    with tabs[3 + tab_offset]:
         st.caption("Tables shown with months as columns (left → right), metrics as rows — matches how financial models are normally read.")
         st.subheader("Phase 1: Pipeline & Capacity")
-        st.dataframe(wide(phase1_df), use_container_width=True)
+        st.dataframe(style_wide(wide(phase1_df)), use_container_width=True)
         st.subheader("Phase 2: Revenue Recognition")
-        st.dataframe(wide(phase2_df), use_container_width=True)
+        st.dataframe(style_wide(wide(phase2_df)), use_container_width=True)
         st.subheader("Phase 3: Renewal Events")
-        st.dataframe(wide(renewals_df), use_container_width=True)
+        st.dataframe(style_wide(wide(renewals_df)), use_container_width=True)
 
 # ===========================================================================
 # COMPARE TWO SCENARIOS MODE
@@ -310,8 +558,8 @@ else:
     with tab3:
         st.caption("Tables shown with months as columns, metrics as rows.")
         st.subheader("Scenario A — Phase 2 Output")
-        st.dataframe(wide(p2a), use_container_width=True)
+        st.dataframe(style_wide(wide(p2a)), use_container_width=True)
         st.subheader("Scenario B — Phase 2 Output")
-        st.dataframe(wide(p2b), use_container_width=True)
+        st.dataframe(style_wide(wide(p2b)), use_container_width=True)
 
 st.caption("Built on the Bowtie Model (Winning by Design). All math is deterministic — no randomized variables anywhere in this model.")
