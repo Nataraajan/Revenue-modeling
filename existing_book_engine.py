@@ -213,6 +213,94 @@ def project_existing_book_runoff(
 
 
 # ---------------------------------------------------------------------------
+# 3B. HISTORICAL ANNUAL ACTUALS — real year-over-year metrics computed
+#     directly from the extract itself (not projected/derived rates), for
+#     every full year boundary present in the historical data. Lets the
+#     dashboard show actual history continuing into the forward forecast,
+#     rather than the forecast appearing to start from nothing.
+# ---------------------------------------------------------------------------
+
+def derive_annual_history(revenue_matrix: pd.DataFrame) -> pd.DataFrame:
+    """
+    Computes ACTUAL annual metrics (same column shape as saas_metrics'
+    forecast output, so the two can be concatenated into one continuous
+    timeline) for every full 12-month year present in the extract.
+    The first available year has no prior-year baseline, so its
+    NRR/churn/expansion fields are None — there's nothing to compare against.
+    """
+    months = list(revenue_matrix.columns)
+    num_full_years = len(months) // 12
+    rows = []
+
+    for y in range(num_full_years):
+        year_start_idx = y * 12
+        year_end_idx = year_start_idx + 11
+        year_months = months[year_start_idx:year_end_idx + 1]
+        end_month = months[year_end_idx]
+
+        ending_arr = revenue_matrix[end_month].sum() * 12
+        ending_logos = int((revenue_matrix[end_month] > 0).sum())
+        revenue = revenue_matrix[year_months].sum().sum()
+
+        if year_start_idx - 1 >= 0:
+            begin_month = months[year_start_idx - 1]
+            then = revenue_matrix[begin_month]
+            now = revenue_matrix[end_month]
+            beginning_arr = then.sum() * 12
+            beginning_logos = int((then > 0).sum())
+
+            matched = then[then > 0]
+            matched_now = now.reindex(matched.index).fillna(0.0)
+            churned_mask = matched_now == 0
+            contraction_mask = (matched_now > 0) & (matched_now < matched)
+            expansion_mask = matched_now > matched
+
+            churned_arr = matched[churned_mask].sum() * 12
+            contraction_arr = (matched[contraction_mask] - matched_now[contraction_mask]).sum() * 12
+            expansion_arr = (matched_now[expansion_mask] - matched[expansion_mask]).sum() * 12
+            nrr = (beginning_arr + expansion_arr - contraction_arr - churned_arr) / beginning_arr if beginning_arr > 0 else None
+            gross_churn_rate = churned_arr / beginning_arr if beginning_arr > 0 else None
+
+            new_customers_mask = (then == 0) & (now > 0)
+            new_arr = now[new_customers_mask].sum() * 12
+            new_logos = int(new_customers_mask.sum())
+            churned_logos = int(churned_mask.sum())
+            logo_churn_rate = churned_logos / beginning_logos if beginning_logos > 0 else None
+        else:
+            beginning_arr = None
+            new_arr = expansion_arr = contraction_arr = churned_arr = 0.0
+            nrr = gross_churn_rate = logo_churn_rate = None
+            new_logos = churned_logos = None
+            beginning_logos = None
+
+        arpa_ending = ending_arr / ending_logos if ending_logos > 0 else None
+
+        rows.append({
+            "period": f"Actual Y-{num_full_years - y}",
+            "type": "Actual",
+            "beginning_arr": round(beginning_arr, 2) if beginning_arr is not None else None,
+            "ending_arr": round(ending_arr, 2),
+            "new_arr_booked": round(new_arr, 2) if new_arr is not None else None,
+            "expansion_arr": round(expansion_arr, 2),
+            "contraction_arr": round(contraction_arr, 2),
+            "churned_arr": round(churned_arr, 2),
+            "nrr_pct": round(nrr * 100, 1) if nrr is not None else None,
+            "gross_dollar_churn_rate_pct": round(gross_churn_rate * 100, 1) if gross_churn_rate is not None else None,
+            "beginning_logos": beginning_logos,
+            "ending_logos": ending_logos,
+            "new_logos": new_logos,
+            "churned_logos": churned_logos,
+            "logo_churn_rate_pct": round(logo_churn_rate * 100, 1) if logo_churn_rate is not None else None,
+            "revenue": round(revenue, 2),
+            "arpa_ending": round(arpa_ending, 2) if arpa_ending is not None else None,
+            "ltv": None,  # not computed for historical actuals — gross margin isn't in a revenue extract
+            "other_boundary_effect": 0.0,
+        })
+
+    return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------------------
 # 4. EXAMPLE RUN — synthetic extract, 20 customers, 24 months, built-in
 #    churn/expansion, to verify derivation math against known inputs
 # ---------------------------------------------------------------------------
