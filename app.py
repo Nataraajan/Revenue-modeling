@@ -14,6 +14,7 @@ from revenue_recognition_engine import bookings_to_contracts, run_recognition, B
 from renewal_engine import RenewalAssumptions, run_full_lifecycle, summarize_renewals
 from existing_book_engine import load_customer_revenue_extract, derive_book_metrics, project_existing_book_runoff, derive_annual_history
 from saas_metrics import aggregate_periods
+from financial_model_export import generate_workbook_bytes
 
 st.set_page_config(page_title="Revenue Architecture Model", layout="wide")
 st.title("Revenue Architecture — Pipeline, Recognition & Renewal Model")
@@ -442,6 +443,24 @@ if mode == "Single Scenario":
         if historical_annual is not None and len(historical_annual) > 0:
             st.caption(f"Showing {len(historical_annual)} year(s) of actuals from your extract, "
                        f"continuing into {len(annual)} year(s) of forecast.")
+
+        with st.expander("📥 Download as financial model (Excel)"):
+            st.caption(
+                "Real formulas, not pasted values — auditable in Excel, shareable with bankers/investors/corp dev. "
+                "Cohort-based revenue recognition with bounded renewal generations. "
+                "Not included in this export: professional services fees, seasonality, and the Existing Book "
+                "overlay — new-business only, and the annual summary covers full years only."
+            )
+            try:
+                xlsx_bytes = generate_workbook_bytes(cfg, num_months)
+                st.download_button(
+                    "Download financial_model.xlsx",
+                    data=xlsx_bytes,
+                    file_name=f"{cfg['pod_name'].replace(' ', '_')}_financial_model.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            except Exception as e:
+                st.error(f"Couldn't generate the workbook: {e}")
 
         c1, c2, c3, c4, c5 = st.columns(5)
         arr_growth_pct = ((latest["ending_arr"] / prior["ending_arr"]) - 1) * 100 if prior is not None and prior["ending_arr"] else None
