@@ -14,7 +14,7 @@ from revenue_recognition_engine import bookings_to_contracts, run_recognition, B
 from renewal_engine import RenewalAssumptions, run_full_lifecycle, summarize_renewals
 from existing_book_engine import load_customer_revenue_extract, derive_book_metrics, project_existing_book_runoff, derive_annual_history
 from saas_metrics import aggregate_periods
-from financial_model_export import generate_workbook_bytes
+from financial_model_export import generate_multi_pod_workbook_bytes
 
 st.set_page_config(page_title="Revenue Architecture Model", layout="wide")
 st.title("Revenue Architecture — Pipeline, Recognition & Renewal Model")
@@ -145,6 +145,59 @@ def style_wide(df: pd.DataFrame, relabel: bool = True) -> pd.DataFrame:
 # of a comparison. `key` namespaces every widget so two instances can run
 # side by side without Streamlit key collisions.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Segment presets — each one actually differs on the underlying economics,
+# not just the label. Field names match the widget key suffixes used below
+# exactly, so they can be injected straight into session_state.
+# ---------------------------------------------------------------------------
+_PRESET_DEFAULTS = {
+    "SMB": dict(
+        existing_aes=0, existing_bdrs=0, num_aes=4, num_bdrs=6, cadence=2,
+        ae_base=60000, ae_var=60000, ae_quota=650000,
+        bdr_base=50000, bdr_var=25000, bdr_sql=8,
+        leads=1200, l2m=0.35, m2s=0.30, selfsrc=1.0,
+        deal=6000, wm=0.28, wb=0.22, ws=0.30,
+        term=12, lag=1, psfee=0.0, churn=0.15, exp=0.12, contr=0.04,
+    ),
+    "Mid-Market": dict(
+        existing_aes=0, existing_bdrs=0, num_aes=3, num_bdrs=2, cadence=3,
+        ae_base=95000, ae_var=95000, ae_quota=1100000,
+        bdr_base=55000, bdr_var=30000, bdr_sql=6,
+        leads=500, l2m=0.30, m2s=0.25, selfsrc=2.0,
+        deal=18000, wm=0.25, wb=0.20, ws=0.35,
+        term=12, lag=2, psfee=0.0, churn=0.12, exp=0.18, contr=0.03,
+    ),
+    "Enterprise": dict(
+        existing_aes=0, existing_bdrs=0, num_aes=2, num_bdrs=3, cadence=4,
+        ae_base=140000, ae_var=140000, ae_quota=1700000,
+        bdr_base=65000, bdr_var=35000, bdr_sql=4,
+        leads=150, l2m=0.25, m2s=0.35, selfsrc=1.5,
+        deal=75000, wm=0.20, wb=0.15, ws=0.30,
+        term=12, lag=4, psfee=0.10, churn=0.08, exp=0.20, contr=0.02,
+    ),
+    "Inbound": dict(
+        existing_aes=0, existing_bdrs=0, num_aes=2, num_bdrs=0, cadence=3,
+        ae_base=70000, ae_var=50000, ae_quota=600000,
+        bdr_base=55000, bdr_var=30000, bdr_sql=6,  # unused — 0 BDRs on this segment
+        leads=2500, l2m=0.45, m2s=0.35, selfsrc=0.0,
+        deal=3500, wm=0.32, wb=0.0, ws=0.0,
+        term=12, lag=1, psfee=0.0, churn=0.18, exp=0.10, contr=0.05,
+    ),
+}
+
+
+_PRESET_SUFFIX_TO_CFG_FIELD = {
+    "existing_aes": "num_existing_aes", "existing_bdrs": "num_existing_bdrs",
+    "num_aes": "num_aes", "num_bdrs": "num_bdrs", "cadence": "hiring_cadence",
+    "ae_base": "ae_base", "ae_var": "ae_variable", "ae_quota": "ae_quota",
+    "bdr_base": "bdr_base", "bdr_var": "bdr_variable", "bdr_sql": "bdr_monthly_sql_quota",
+    "leads": "monthly_leads", "l2m": "lead_to_mql", "m2s": "mql_to_sql", "selfsrc": "ae_self_sourced",
+    "deal": "avg_deal_size", "wm": "win_marketing", "wb": "win_bdr", "ws": "win_self",
+    "term": "contract_term", "lag": "implementation_lag", "psfee": "ps_fee_pct",
+    "churn": "churn_rate", "exp": "expansion_rate", "contr": "contraction_rate",
+}
+
+
 def render_inputs(key: str, label: str) -> dict:
     st.sidebar.subheader(label)
 
@@ -152,6 +205,19 @@ def render_inputs(key: str, label: str) -> dict:
         "Pod name", ["SMB", "Mid-Market", "Enterprise", "Inbound", "Other (custom)"],
         index=1, key=f"{key}_pod_preset",
     )
+
+    # Detect a preset CHANGE and inject its defaults into session_state
+    # *before* the affected widgets are created below — Streamlit widgets
+    # read their initial value from session_state if already set, ignoring
+    # the value= parameter in code once a key has been touched. Without
+    # this, switching the dropdown only ever changed the pod_name label,
+    # never the actual team/deal/rate assumptions underneath it.
+    prev_key = f"{key}_applied_preset"
+    if st.session_state.get(prev_key) != pod_preset and pod_preset in _PRESET_DEFAULTS:
+        for suffix, val in _PRESET_DEFAULTS[pod_preset].items():
+            st.session_state[f"{key}_{suffix}"] = val
+        st.session_state[prev_key] = pod_preset
+
     if pod_preset == "Other (custom)":
         pod_name = st.sidebar.text_input("Custom pod name", "MidMarket", key=f"{key}_pod_name_custom")
     else:
@@ -444,19 +510,37 @@ if mode == "Single Scenario":
             st.caption(f"Showing {len(historical_annual)} year(s) of actuals from your extract, "
                        f"continuing into {len(annual)} year(s) of forecast.")
 
-        with st.expander("📥 Download as financial model (Excel)"):
+        with st.expander("📥 Download as financial model (Excel — multi-segment)"):
             st.caption(
                 "Real formulas, not pasted values — auditable in Excel, shareable with bankers/investors/corp dev. "
-                "Cohort-based revenue recognition with bounded renewal generations. "
-                "Not included in this export: professional services fees, seasonality, and the Existing Book "
-                "overlay — new-business only, and the annual summary covers full years only."
+                "One Capacity + Revenue sheet pair per segment, plus a consolidated Summary with per-segment "
+                "columns AND a Total Company column that sums across them — a real multi-segment model, not "
+                "just one team. Not included: professional services fees, seasonality, Existing Book overlay. "
+                "Annual summary covers full years only."
+            )
+            other_presets = [p for p in _PRESET_DEFAULTS.keys() if p != cfg["pod_name"]]
+            additional = st.multiselect(
+                f"Add other standard segments alongside '{cfg['pod_name']}' (currently configured in the sidebar)",
+                other_presets, default=other_presets,
             )
             try:
-                xlsx_bytes = generate_workbook_bytes(cfg, num_months)
+                cfg_list = [cfg]
+                for preset_name in additional:
+                    preset_cfg = dict(cfg)  # inherit shared settings (execution_efficiency, seasonality=None, etc.)
+                    mapped = {_PRESET_SUFFIX_TO_CFG_FIELD[k]: v for k, v in _PRESET_DEFAULTS[preset_name].items()}
+                    preset_cfg.update(mapped)
+                    preset_cfg["pod_name"] = preset_name
+                    preset_cfg["ae_hire_months"] = None
+                    preset_cfg["bdr_hire_months"] = None
+                    cfg_list.append(preset_cfg)
+
+                xlsx_bytes = generate_multi_pod_workbook_bytes(cfg_list, num_months)
+                segment_names = ", ".join(c["pod_name"] for c in cfg_list)
+                st.caption(f"This export covers: {segment_names}")
                 st.download_button(
                     "Download financial_model.xlsx",
                     data=xlsx_bytes,
-                    file_name=f"{cfg['pod_name'].replace(' ', '_')}_financial_model.xlsx",
+                    file_name="company_financial_model.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
             except Exception as e:
