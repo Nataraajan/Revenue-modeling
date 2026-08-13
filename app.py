@@ -23,15 +23,155 @@ st.set_page_config(page_title="Revenue Architecture Model", layout="wide")
 # width so short numbers don't sit in a lot of empty box.
 st.markdown("""
 <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+
+  /* Force all 6 top metric columns to stretch to equal height */
+    div[data-testid="stHorizontalBlock"]:has(p:contains("Ending ARR")) {
+        align-items: stretch !important;
+    }
+    
+    div[data-testid="stHorizontalBlock"]:has(p:contains("Ending ARR")) > div[data-testid="stColumn"] {
+        display: flex !important;
+        flex-direction: column !important;
+    }
+    
+    div[data-testid="stHorizontalBlock"]:has(p:contains("Ending ARR")) > div[data-testid="stColumn"] div[data-testid="stVerticalBlockBorderWrapper"] {
+        flex: 1 !important;
+        display: flex !important;
+        flex-direction: column !important;
+        justify-content: center !important;
+    }
+
+    
+
+    /* 2. Main Title (Responsive) */
+    h1.main-title {
+        color: #163A63 !important;
+        font-weight: 700 !important;
+        font-size: 32px !important;
+        line-height: 1.15 !important;
+        margin-bottom: 0 !important;
+        padding-bottom: 0 !important;
+    }
+    @media (max-width: 768px) { h1.main-title { font-size: 24px !important; } }
+
+    /* 3. Input Controls (Clean workspace) */
     div[data-testid="stNumberInput"] input { max-width: 110px; }
     div[data-testid="stNumberInput"] { max-width: 150px; }
     div[data-testid="stSelectbox"] { max-width: 260px; }
-    /* Native st.container(border=True) only gives a plain 1px line — add a
-       soft shadow + slightly larger radius so bordered "card" sections read
-       closer to a real card, not just an outlined box. */
-    div[data-testid="stVerticalBlockBorderWrapper"] {
-        border-radius: 10px;
-        box-shadow: 0 1px 3px rgba(16, 24, 40, 0.08);
+    
+    div[data-baseweb="input"] > div, div[data-baseweb="select"] > div {
+        border-radius: 8px !important;
+        border-color: #E2E8F0 !important;
+        background-color: #FFFFFF !important;
+    }
+    .stNumberInput label p, .stSelectbox label p, .stSlider label p {
+        font-size: 12px !important;
+        font-weight: 500 !important;
+        color: #334155 !important;
+    }
+    .stSlider div[data-testid="stThumbValue"] { color: #2563EB !important; font-weight: 600; }
+    
+    /* 4. Action Buttons */
+    button[kind="primary"] {
+        background-color: #2563EB !important;
+        color: white !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+        border: none !important;
+    }
+    button[kind="secondary"] {
+        background-color: #FFFFFF !important;
+        color: #475569 !important;
+        border: 1px solid #CBD5E1 !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+    }
+
+    /* 5. Executive Dashboard KPI Cards */
+    div[data-testid="stMetric"] {
+        background-color: #FFFFFF !important;
+        border: 1px solid #E2E8F0 !important;
+        border-radius: 10px !important;
+        padding: 16px 20px !important;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06) !important;
+    }
+    
+    div[data-testid="stMetricLabel"] p {
+        font-size: 12px !important;
+        color: #64748B !important;
+        font-weight: 500 !important;
+        white-space: normal !important; 
+        overflow: visible !important;
+    }
+    
+    div[data-testid="stMetricValue"] {
+        font-size: 26px !important;
+        font-weight: 700 !important;
+        color: #172033 !important;
+        line-height: 1.2 !important;
+        margin-top: 4px;
+    }
+
+    /* 6. KPI Delta Pills */
+    div[data-testid="stMetricDelta"] svg { display: none; }
+    div[data-testid="stMetricDelta"] {
+        font-size: 12px !important;
+        font-weight: 600 !important;
+        padding: 2px 8px !important;
+        border-radius: 6px !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        margin-top: 8px !important;
+        width: fit-content;
+    }
+    /* Green = Positive */
+    div[data-testid="stMetricDelta"]:has(div:contains("▲")), 
+    div[data-testid="stMetricDelta"][style*="color: rgb(9, 171, 59)"] {
+        background-color: #ECFDF3 !important; color: #16A34A !important;
+    }
+    /* Red = Negative */
+    div[data-testid="stMetricDelta"]:has(div:contains("▼")), 
+    div[data-testid="stMetricDelta"][style*="color: rgb(255, 43, 43)"] {
+        background-color: #FEF2F2 !important; color: #DC2626 !important;
+    }
+
+    /* 7. Semantic Chart Colors via CSS */
+    div[data-testid="column"]:nth-child(1) div[data-testid="stMetric"] svg { filter: hue-rotate(240deg) saturate(150%) brightness(0.8); } /* Green (ARR) */
+    div[data-testid="column"]:nth-child(2) div[data-testid="stMetric"] svg { filter: hue-rotate(100deg); } /* Blue (Rev) */
+    div[data-testid="column"]:nth-child(3) div[data-testid="stMetric"] svg { filter: hue-rotate(150deg); } /* Purple (NRR) */
+    div[data-testid="column"]:nth-child(4) div[data-testid="stMetric"] svg { filter: grayscale(100%) sepia(100%) hue-rotate(340deg) saturate(300%) brightness(0.9); } /* Orange (Accts) */
+    div[data-testid="column"]:nth-child(5) div[data-testid="stMetric"] svg { filter: hue-rotate(60deg) saturate(200%); }  /* Teal (DefRev) */
+    div[data-testid="column"]:nth-child(6) div[data-testid="stMetric"] svg { filter: grayscale(100%) brightness(40%) sepia(100%) hue-rotate(-50deg) saturate(600%) contrast(0.8); } /* Red (Cost) */
+
+    /* 8. Tabs */
+    button[data-baseweb="tab"] { color: #475569 !important; font-weight: 500 !important; }
+    button[data-baseweb="tab"][aria-selected="true"] { 
+        color: #2563EB !important; 
+        font-weight: 600 !important; 
+        border-bottom: 2px solid #2563EB !important; 
+    }
+    
+    /* 9. Segmented Control & Callouts */
+    div[data-testid="stSegmentedControl"] label { border-color: #CBD5E1 !important; color: #475569 !important; }
+    div[data-testid="stSegmentedControl"] label[data-checked="true"] { background-color: #EFF6FF !important; border-color: #2563EB !important; color: #2563EB !important; font-weight: 600 !important; }
+    
+    /* Info Box styling */
+    div[data-testid="stAlert"] { background-color: #EFF6FF !important; border: 1px solid #DBEAFE !important; border-radius: 8px !important; color: #475569 !important; }
+    
+    /* Advanced Expander */
+    .streamlit-expanderHeader { font-weight: 600 !important; color: #172033 !important; background-color: #FFFFFF !important; border: 1px solid #E2E8F0 !important; border-radius: 8px;}
+    
+    /* Market Chips */
+    span[data-baseweb="tag"] { background-color: #2563EB !important; color: white !important; opacity: 0.9;}
+
+    /* 10. Bold dataframe headers (Glide Data Grid renders via canvas,
+       so Styler.set_table_styles is ignored — these CSS variables are
+       the only lever available for header font weight/color.) */
+    .stDataFrameGlideDataEditor {
+        --gdg-header-font-style: 700 14px !important;
+        --gdg-text-header: rgba(26, 34, 51, 0.9) !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -41,22 +181,56 @@ st.markdown("""
 # identified by key prefix, regardless of which mode is active) since reset
 # doesn't depend on any mode-specific data being computed yet.
 # ---------------------------------------------------------------------------
-header_left, header_right = st.columns([3, 1], vertical_alignment="center")
+# ---------------------------------------------------------------------------
+# Header — title + top-right action buttons (Reset, Undo, and Export)
+# ---------------------------------------------------------------------------
+def _is_resettable_key(k: str) -> bool:
+    reset_prefixes = ("s_", "a_", "b_", "smb_", "mm_", "ent_", "inb_", "fc_")
+    reset_exact = {"scenario_a_label", "scenario_b_label"}
+    return k.startswith(reset_prefixes) or k in reset_exact or k.endswith("_applied_preset")
+
+header_left, header_actions = st.columns([2.5, 1.5], vertical_alignment="bottom")
+
 with header_left:
-    st.title("Revenue Architecture — Pipeline, Recognition & Renewal Model")
-with header_right:
-    if st.button("↺ Reset All", type="secondary", width="stretch"):
-        _reset_prefixes = ("s_", "a_", "b_", "smb_", "mm_", "ent_", "inb_", "fc_")
-        _reset_exact = {"scenario_a_label", "scenario_b_label"}
+    st.markdown(
+        '<h1 class="main-title" style="border-bottom: 2px solid #E2E8F0; padding-bottom: 12px; margin-bottom: 12px;">'
+        'Revenue Architecture — Pipeline, Recognition & Renewal Model'
+        '</h1>', 
+        unsafe_allow_html=True
+    )
+    # Clean explanatory text directly under the heading and line
+    st.markdown(
+        '<p style="color: #64748B; font-size: 14px; line-height: 1.5; margin-bottom: 20px;">'
+        'Model how GTM capacity, pipeline, implementation timing and customer retention translate into ARR and recognized revenue. '
+        'Start by selecting a segment and adjusting the assumptions below.'
+        '</p>',
+        unsafe_allow_html=True
+    )
+
+# 1. Split the right side into 3 mini-columns for the buttons
+btn_undo, btn_reset, btn_export = header_actions.columns([1, 1, 1.5], vertical_alignment="center")
+
+# 2. Render Undo and Reset immediately
+with btn_undo:
+    has_snapshot = bool(st.session_state.get("_last_reset_snapshot"))
+    if st.button("↩ Undo Reset", type="tertiary", use_container_width=True, disabled=not has_snapshot):
+        snapshot = st.session_state.pop("_last_reset_snapshot", {})
+        for k, v in snapshot.items():
+            st.session_state[k] = v
+        st.rerun()
+
+with btn_reset:
+    if st.button("↺ Reset All", type="secondary", use_container_width=True):
+        st.session_state["_last_reset_snapshot"] = {
+            k: v for k, v in st.session_state.items() if _is_resettable_key(k)
+        }
         for k in list(st.session_state.keys()):
-            if k.startswith(_reset_prefixes) or k in _reset_exact or k.endswith("_applied_preset"):
+            if _is_resettable_key(k):
                 del st.session_state[k]
         st.rerun()
 
-st.caption("Bowtie Model (Winning by Design) — deterministic, no randomization. Every number traces to an explicit input.")
-with st.container(border=True):
-    st.markdown("ℹ️ **What this model does**")
-    st.caption("Model how GTM capacity, pipeline, implementation timing and customer retention translate into ARR and recognized revenue. Start by selecting a segment and adjusting the assumptions below.")
+# 3. Create a placeholder ONLY for the Export button
+export_container = btn_export.container()
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +286,10 @@ def _format_cell(value, field_name: str) -> str:
     if pd.isna(value):
         return "—"
     if field_name in _CURRENCY_FIELDS:
+        if abs(value) >= 1_000_000:
+            return f"${value / 1_000_000:,.1f}M"
+        elif abs(value) >= 1_000:
+            return f"${value / 1_000:,.1f}K"
         return f"${value:,.0f}"
     if field_name in _CURRENCY_PRECISE_FIELDS:
         return f"${value:,.3f}"
@@ -186,6 +364,14 @@ def style_wide(df: pd.DataFrame, relabel: bool = True) -> pd.DataFrame:
     if relabel:
         formatted.index = [_relabel(name) for name in formatted.index]
     return formatted
+
+
+def _bold_headers(df: pd.DataFrame) -> "pd.io.formats.style.Styler":
+    """Returns a Styler with bold row and column headers for st.dataframe()."""
+    return df.style.set_table_styles([
+        {"selector": "th", "props": [("font-weight", "700")]},
+        {"selector": "th.row_heading", "props": [("font-weight", "700")]},
+    ])
 
 
 # ---------------------------------------------------------------------------
@@ -494,14 +680,21 @@ def revenue_by_origin(contracts: list, num_months: int) -> dict:
 def make_waterfall(labels, values, title, measure=None):
     if measure is None:
         measure = ["absolute"] + ["relative"] * (len(values) - 2) + ["total"]
+        
     fig = go.Figure(go.Waterfall(
         x=labels, y=values, measure=measure,
-        connector={"line": {"color": "rgba(120,120,120,0.4)"}},
-        increasing={"marker": {"color": "#2ca02c"}},
-        decreasing={"marker": {"color": "#d62728"}},
-        totals={"marker": {"color": "#1f77b4"}},
+        connector={"line": {"color": "#E2E8F0", "width": 1}},
+        increasing_marker_color="#16A34A", # Green for New ARR / Expansion
+        decreasing_marker_color="#DC2626", # Red for Contraction / Churn
+        totals_marker_color="#163A63"      # Navy for Beginning / Ending
     ))
-    fig.update_layout(title=title, showlegend=False, height=420, margin=dict(t=50, b=20))
+    
+    fig.update_layout(
+        title=title, showlegend=False, height=420, margin=dict(t=50, b=20),
+        plot_bgcolor="white", paper_bgcolor="white",
+        yaxis=dict(gridcolor="#F1F5F9", zerolinecolor="#E2E8F0"),
+        font=dict(family="Inter, sans-serif", color="#475569")
+    )
     return fig
 
 
@@ -593,30 +786,46 @@ def combine_renewals_for_display(renewals_df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # MODE SELECTOR
 # ---------------------------------------------------------------------------
-mode = st.segmented_control(
-    "Mode", ["Full Company (All Segments)", "Compare Two Scenarios"],
-    default="Full Company (All Segments)", required=True, key="mode_selector",
-)
+# ---------------------------------------------------------------------------
+# MODE SELECTOR & GLOBAL INPUTS
+# ---------------------------------------------------------------------------
+if "app_mode" not in st.session_state:
+    st.session_state.app_mode = "Full Company (All Segments)"
+
+st.write("") # Spacing
+ctrl_col1, ctrl_col2, ctrl_space, ctrl_col3, ctrl_col4 = st.columns([1.5, 1.6, 2, 1.2, 1.2], vertical_alignment="bottom")
+
+with ctrl_col1:
+    st.caption("Mode")
+    if st.button("📊 All Segments", use_container_width=True, type="primary" if st.session_state.app_mode == "Full Company (All Segments)" else "secondary"):
+        st.session_state.app_mode = "Full Company (All Segments)"
+        st.rerun()
+
+with ctrl_col2:
+    st.caption("&nbsp;") # Invisible caption to align button with the one above
+    if st.button("⚖️ Compare Scenarios", use_container_width=True, type="primary" if st.session_state.app_mode == "Compare Two Scenarios" else "secondary"):
+        st.session_state.app_mode = "Compare Two Scenarios"
+        st.rerun()
+
+with ctrl_col3:
+    global_horizon = st.number_input("Forecast Horizon (Months)", 6, 48, 24, key="global_horizon")
+
+with ctrl_col4:
+    global_margin = st.number_input("Gross Margin % for LTV", 0.0, 1.0, 0.75, step=0.01, key="global_margin")
+
+st.write("") # Spacing
 
 # ===========================================================================
-# FULL COMPANY MODE — all 4 standard segments configured and run together
-# (previously one segment at a time behind a dropdown). Horizon and gross
-# margin are shared, top-level controls here rather than duplicated per box,
-# since all 4 markets need to run over the same window for a coherent
-# consolidated total.
+# FULL COMPANY MODE
 # ===========================================================================
-if mode == "Full Company (All Segments)":
+if st.session_state.app_mode == "Full Company (All Segments)":
     MARKET_NAMES = ["SMB", "Mid-Market", "Enterprise", "Inbound"]
     MARKET_KEYS = {"SMB": "smb", "Mid-Market": "mm", "Enterprise": "ent", "Inbound": "inb"}
 
-    fc1, fc2 = st.columns(8)[:2]
-    num_months = fc1.number_input("Horizon (months)", 6, 48, 24, key="fc_num_months",
-                                   help="How many months forward the model projects, starting from month 1 of new bookings. Shared across all 4 markets so the consolidated total is coherent.")
-    gross_margin_pct = fc2.number_input("Gross margin % (for LTV)", 0.0, 1.0, 0.75, step=0.01, key="fc_gm",
-                                         help="Used for LTV. Blended gross margin on subscription revenue. Used only in the LTV formula: LTV = ARPA × Gross Margin ÷ Annual Churn Rate.")
-    st.caption("Each market box below shows its own live AE Quota Attainment readout, recalculated from that "
-               "box's current inputs. Full definitions of Capacity/Demand-Constrained Bookings, Theoretical "
-               "Bookings, Execution Efficiency and Binding Constraint are in the 📈 Pipeline & Capacity tab below.")
+    num_months = global_horizon
+    gross_margin_pct = global_margin
+
+   
 
     # st.expander explicitly discourages nesting expanders inside each other,
     # so the outer "Segments & Assumptions" grouping is a bordered container
@@ -624,29 +833,24 @@ if mode == "Full Company (All Segments)":
     # below stay as real (collapsible) expanders.
     cfgs = {}
     with st.container(border=True):
-        st.markdown("#### 📁 Segments & Assumptions")
+        st.markdown("""
+            <div style="background-color: #163A63; color: #FFFFFF; padding: 14px 20px; font-weight: 600; font-size: 16px; margin: -17px -17px 12px -17px; border-top-left-radius: 11px; border-top-right-radius: 11px;">
+                Segments & Assumptions
+            </div>
+        """, unsafe_allow_html=True)
         for market in MARKET_NAMES:
-            with st.expander(market, expanded=True):
-                st.badge("Active", color="green")
+            with st.expander(market, expanded=False):
                 cfg_m = render_inputs(MARKET_KEYS[market], market, num_months_default=num_months,
                                        fixed_segment=market, show_horizon=False)
-                # Recomputed from THIS box's current inputs every rerun (headcount,
-                # quota, SQL volume, win rates, etc. all feed into it) — not a
-                # static note. Shown as an st.info box, not just caption text, so
-                # it reads as a distinct output rather than blending into the
-                # surrounding assumption labels.
                 att = attainment_summary(cfg_m, num_months)
                 if att["avg_attainment_pct"] is not None:
                     st.info(
-                        f"**{att['avg_attainment_pct']:.1f}%** average AE capacity utilization "
-                        f"(actual bookings ÷ AE capacity) · Capacity-bound in "
-                        f"{att['months_capacity_bound']}/{att['total_months']} months.\n\n"
+                        f"<h4 style='color: #2563EB; font-size: 15px; margin-bottom: 6px; margin-top: 0px;'>📊 AE Quota Attainment: {att['avg_attainment_pct']:.1f}%</h4>"
+                        f"Capacity-bound in {att['months_capacity_bound']}/{att['total_months']} months.\n\n"
                         + ("AEs are fully utilized — headcount/quota, not pipeline, is the limiting factor here. "
-                           "More BDR/marketing SQLs alone won't grow bookings until AE capacity increases."
                            if att["months_capacity_bound"] == att["total_months"]
-                           else "AEs have slack capacity in some months — more pipeline (marketing/BDR) can still "
-                                "convert to bookings without adding headcount."),
-                        icon="📊", title="AE Quota Attainment",
+                           else "AEs have slack capacity in some months — more pipeline can still convert to bookings."),
+                        icon="ℹ️"
                     )
             cfgs[market] = cfg_m
 
@@ -804,26 +1008,21 @@ if mode == "Full Company (All Segments)":
             st.caption(f"Showing {len(historical_annual)} year(s) of actuals from your extract, "
                        f"continuing into {len(annual)} year(s) of forecast.")
 
-        with st.expander("↓ Export Auditable Excel Model", icon="📥"):
-            st.caption(
-                "Real formulas, not pasted values — auditable in Excel, shareable with bankers/investors/corp dev. "
-                "One Capacity + Revenue sheet pair per segment, plus a consolidated Summary with per-segment "
-                "columns AND a Total Company column that sums across them — a real multi-segment model, not "
-                "just one team. Not included: professional services fees, seasonality, Existing Book overlay. "
-                "Annual summary covers full years only."
-            )
-            st.caption(f"This export covers the markets currently selected above: {', '.join(selected_markets)}.")
+        with export_container:
             try:
                 cfg_list = [cfgs[m] for m in selected_markets]
                 xlsx_bytes = generate_multi_pod_workbook_bytes(cfg_list, num_months)
                 st.download_button(
-                    "Download financial_model.xlsx",
+                    label="📥 Export Auditable Excel Model",
                     data=xlsx_bytes,
                     file_name="company_financial_model.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary",
+                    use_container_width=True,
+                    help=f"Download an auditable Excel model covering: {', '.join(selected_markets)}."
                 )
             except Exception as e:
-                st.error(f"Couldn't generate the workbook: {e}")
+                st.caption("Configure segments to export")
 
         # Hero tiles: primary audience is FP&A/CFO, not investors — accounting-
         # operational metrics (Recognized Revenue, Deferred Revenue) take
@@ -835,50 +1034,92 @@ if mode == "Full Company (All Segments)":
         logos_delta = _delta("ending_logos")
         nrr_delta = _delta("nrr_pct")
 
-        # Sparkline trend lines use the full combined_annual series (Actual +
-        # Forecast, every period) — NaN-filled to 0 since st.metric's inline
-        # chart can't handle missing values (e.g. NRR's first-ever year has
-        # no prior-year baseline to compute from).
-        c1, c2, c3, c4, c5, c6 = st.columns(6)
-        arr_growth_pct = ((latest["ending_arr"] / prior["ending_arr"]) - 1) * 100 if prior is not None and prior["ending_arr"] else None
-        c1.metric("Ending ARR", f"${latest['ending_arr']:,.0f}",
-                   delta=f"{arr_growth_pct:.1f}% YoY" if arr_growth_pct is not None else None,
-                   border=True, icon="💰", chart_data=combined_annual["ending_arr"].fillna(0), chart_type="line")
-        c2.metric("Recognized Revenue", f"${latest['revenue']:,.0f}" if latest["revenue"] is not None else "—",
-                   delta=f"${revenue_delta:,.0f}" if revenue_delta is not None else None,
-                   border=True, icon="📈", chart_data=combined_annual["revenue"].fillna(0), chart_type="line")
-        c3.metric("Net Revenue Retention", f"{latest['nrr_pct']:.1f}%" if latest["nrr_pct"] is not None else "—",
-                   delta=f"{nrr_delta:.1f} pts" if nrr_delta is not None else None, delta_color="normal",
-                   border=True, icon="🔁", chart_data=combined_annual["nrr_pct"].fillna(0), chart_type="line")
-        c4.metric("Live Accounts", f"{int(latest['ending_logos']):,}" if latest["ending_logos"] is not None else "—",
-                   delta=f"{logos_delta:,.0f}" if logos_delta is not None else None,
-                   border=True, icon="👥", chart_data=combined_annual["ending_logos"].fillna(0), chart_type="line")
-        c5.metric("Deferred Revenue", f"${ending_deferred_revenue:,.0f}",
-                   help="New-business deferred revenue balance (billed but not yet recognized). Doesn't include the Existing Book overlay — a revenue extract has no individual contract dates to derive a deferred balance from.",
-                   border=True, icon="⏳", chart_data=combined_annual["deferred_revenue"].fillna(0), chart_type="line")
+        # Sparklines plot the REAL underlying series at the finest resolution
+        # each metric is actually computed at, not the 2-3-point annual
+        # rollup — a straight line between 2 annual points is indistinguishable
+        # from synthetic data even though it's real, since it can't show any
+        # month-to-month texture (AE ramp curves, capacity-bound plateaus).
+        # Ending ARR / Live Accounts / Deferred Revenue are genuinely monthly
+        # quantities in phase2_df already. NRR is only ever computed at
+        # cohort (quarterly/annual) resolution by design — see saas_metrics.py
+        # docstring, "a single quarter's churn rate is too noisy" — so its
+        # sparkline uses quarterly data, the finest real resolution available,
+        # rather than annual or fabricated monthly interpolation.
+        quarterly_for_sparkline = aggregate_periods(
+            phase2_df, renewals_df, existing_book_df, all_contracts, num_months,
+            period_months=3, existing_book_base_arr=eb_base_arr, existing_book_base_logos=eb_base_logos,
+        )
 
-        # Total Cost of Capacity + a capacity-bound gauge — no native Streamlit
-        # gauge exists, so this one tile uses a small Plotly Indicator inside
-        # a bordered container to visually read as one card like the other
-        # 5 st.metric tiles (which get their border from st.metric's own
-        # border=True param instead).
-        months_capacity_bound_total = int((phase1_df["binding_constraint"] == "CAPACITY").sum())
-        total_months_count = len(phase1_df)
-        capacity_bound_pct = round(100 * months_capacity_bound_total / total_months_count, 0) if total_months_count else 0
-        with c6:
-            with st.container(border=True):
-                gcol1, gcol2 = st.columns([3, 2])
-                gcol1.metric("Total Cost of Capacity", f"${phase1_df['total_cost_of_capacity'].sum():,.0f}", icon="🏭")
-                with gcol2:
-                    gauge_fig = go.Figure(go.Indicator(
-                        mode="gauge+number", value=capacity_bound_pct,
-                        number={"suffix": "%", "font": {"size": 20}},
-                        gauge={"axis": {"range": [0, 100], "visible": False},
-                               "bar": {"color": "#2563EB"}, "bgcolor": "#F4F6FA", "borderwidth": 0},
-                    ))
-                    gauge_fig.update_layout(height=90, margin=dict(l=0, r=0, t=0, b=0))
-                    st.plotly_chart(gauge_fig, width='stretch', config={"displayModeBar": False})
-                st.caption(f"{months_capacity_bound_total}/{total_months_count} months capacity-bound")
+        # Helper function for $XX.XM formatting
+        # Helper function for millions formatting
+        def _fmt_millions(val):
+            if val is None or pd.isna(val):
+                return "—"
+            if abs(val) >= 1_000_000:
+                return f"${val / 1_000_000:,.1f}M"
+            return f"${val:,.0f}"
+
+        # Re-compute delta strings for the metrics
+        arr_growth_pct = ((latest["ending_arr"] / prior["ending_arr"]) - 1) * 100 if prior is not None and prior["ending_arr"] else None
+        arr_delta_str = f"▲ {arr_growth_pct:.1f}% YoY" if arr_growth_pct and arr_growth_pct >= 0 else (f"▼ {abs(arr_growth_pct):.1f}% YoY" if arr_growth_pct else None)
+        rev_delta_str = f"▲ {_fmt_millions(revenue_delta)}" if revenue_delta and revenue_delta >= 0 else (f"▼ {_fmt_millions(abs(revenue_delta))}" if revenue_delta else None)
+        nrr_delta_str = f"▲ {nrr_delta:.1f} pts" if nrr_delta and nrr_delta >= 0 else (f"▼ {abs(nrr_delta):.1f} pts" if nrr_delta else None)
+        logos_delta_str = f"▲ {logos_delta:,.0f}" if logos_delta and logos_delta >= 0 else (f"▼ {abs(logos_delta):,.0f}" if logos_delta else None)
+
+        # Helper for hex color conversion to area fill opacity
+        def _hex_to_rgba(hex_str, alpha):
+            hex_str = hex_str.lstrip('#')
+            r, g, b = int(hex_str[0:2], 16), int(hex_str[2:4], 16), int(hex_str[4:6], 16)
+            return f"rgba({r}, {g}, {b}, {alpha})"
+
+        cols = st.columns(6)
+        
+        metrics_data = [
+            ("Ending ARR", _fmt_millions(latest['ending_arr']), arr_delta_str, phase2_df["live_arr"], "#16A34A"),       # Green
+            ("Recognized Rev", _fmt_millions(latest['revenue']), rev_delta_str, phase2_df["total_revenue_recognized"], "#2563EB"), # Blue
+            ("Blended NRR", f"{latest['nrr_pct']:.1f}%" if latest["nrr_pct"] is not None else "—", nrr_delta_str, quarterly_for_sparkline["nrr_pct"].fillna(0), "#9333EA"), # Purple
+            ("Live Accounts", f"{int(latest['ending_logos']):,}" if latest["ending_logos"] is not None else "—", logos_delta_str, phase2_df["live_accounts"], "#0EA5E9"), # Teal/Cyan
+            ("Deferred Revenue", _fmt_millions(ending_deferred_revenue), None, phase2_df["deferred_revenue_balance"], "#D97706"), # Amber
+            ("Capacity Cost", _fmt_millions(phase1_df['total_cost_of_capacity'].sum()), None, phase1_df["total_cost_of_capacity"], "#DC2626") # Red/Coral
+        ]
+
+        for i, (label, val, delta, chart_vals, val_color) in enumerate(metrics_data):
+            with cols[i]:
+                with st.container(border=True):
+                    mc_left, mc_right = st.columns([1.1, 1.3], vertical_alignment="center")
+                    with mc_left:
+                        st.markdown(f"<p style='color: #64748B; font-size: 11px; font-weight: 500; margin-bottom: 0px;'>{label}</p>", unsafe_allow_html=True)
+                        
+                        # Value and delta placed nicely inline or tightly stacked together
+                        if delta:
+                            d_color = "#16A34A" if "▲" in delta else "#DC2626"
+                            d_bg = "#ECFDF3" if "▲" in delta else "#FEF2F2"
+                            st.markdown(
+                                f"<div style='display: flex; align-items: baseline; gap: 6px; margin-top: 2px;'>"
+                                f"<span style='color: {val_color}; font-size: 18px; font-weight: 700;'>{val}</span>"
+                                f"<span style='background-color: {d_bg}; color: {d_color}; font-size: 9px; font-weight: 600; padding: 1px 4px; border-radius: 4px; white-space: nowrap;'>{delta}</span>"
+                                f"</div>",
+                                unsafe_allow_html=True
+                            )
+                        else:
+                            st.markdown(f"<p style='color: {val_color}; font-size: 18px; font-weight: 700; margin-top: 2px; margin-bottom: 0px;'>{val}</p>", unsafe_allow_html=True)
+                            
+                    with mc_right:
+                        if chart_vals is not None and len(chart_vals) > 0:
+                            fig_mini = go.Figure(go.Scatter(
+                                y=chart_vals,
+                                mode='lines',
+                                fill='tozeroy',
+                                line=dict(color=val_color, width=2),
+                                fillcolor=_hex_to_rgba(val_color, 0.12)
+                            ))
+                            fig_mini.update_layout(
+                                height=50, margin=dict(l=0, r=0, t=2, b=2),
+                                paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                                xaxis=dict(visible=False), yaxis=dict(visible=False),
+                                showlegend=False
+                            )
+                            st.plotly_chart(fig_mini, use_container_width=True, config={"displayModeBar": False})
 
         with st.expander("More metrics (GRR, Logo Churn, LTV)"):
             m1, m2, m3 = st.columns(3)
@@ -889,22 +1130,68 @@ if mode == "Full Company (All Segments)":
                        delta=f"{logo_churn_delta:.1f} pts" if logo_churn_delta is not None else None, delta_color="inverse")
             m3.metric("Customer LTV", f"${latest['ltv']:,.0f}" if latest["ltv"] is not None else "—")
 
-        st.markdown("**By Year**")
-        _by_year_src = combined_annual.set_index("period")
-        by_year = pd.DataFrame({
-            "Ending ARR": _by_year_src["ending_arr"].apply(lambda v: f"${v:,.0f}" if pd.notna(v) else "—"),
-            "Recognized Revenue": _by_year_src["revenue"].apply(lambda v: f"${v:,.0f}" if pd.notna(v) else "—"),
-            "NRR": _by_year_src["nrr_pct"].apply(lambda v: f"{v:.1f}%" if pd.notna(v) else "—"),
-            "Live Accounts": _by_year_src["ending_logos"].apply(lambda v: f"{int(v):,}" if pd.notna(v) else "—"),
-            "Deferred Revenue": _by_year_src["deferred_revenue"].apply(lambda v: f"${v:,.0f}" if pd.notna(v) else "—"),
-        }).T
-        st.dataframe(by_year, width='stretch')
+        # ---------------------------------------------------------------
+        # Row A: Annual Performance | Key Drivers | ARR Bridge
+        # ---------------------------------------------------------------
+        year1_row, latest_forecast_row = annual.iloc[0], annual.iloc[-1]
 
-        st.divider()
+        def _pct_change(new, old):
+            if old in (None, 0) or pd.isna(old) or pd.isna(new):
+                return None
+            return (new - old) / abs(old) * 100
 
-        if len(combined_annual) > 1:
-            chart_col, drivers_col = st.columns([2, 1])
-            with chart_col:
+        row_a_col1, row_a_col2, row_a_col3 = st.columns([1.1, 0.7, 1.4])
+
+        with row_a_col1:
+            st.markdown("**Annual Performance**")
+            _by_year_labeled = combined_annual.copy()
+            _by_year_labeled["period"] = _by_year_labeled.apply(
+                lambda r: f"{r['period']} ({r['type']})" if pd.notna(r.get("type")) else r["period"], axis=1
+            )
+            _by_year_src = _by_year_labeled.set_index("period")
+            by_year = pd.DataFrame({
+                "Ending ARR": _by_year_src["ending_arr"].apply(lambda v: f"${v:,.0f}" if pd.notna(v) else "—"),
+                "Recognized Revenue": _by_year_src["revenue"].apply(lambda v: f"${v:,.0f}" if pd.notna(v) else "—"),
+                "NRR": _by_year_src["nrr_pct"].apply(lambda v: f"{v:.1f}%" if pd.notna(v) else "—"),
+                "Live Accounts": _by_year_src["ending_logos"].apply(lambda v: f"{int(v):,}" if pd.notna(v) else "—"),
+                "Deferred Revenue": _by_year_src["deferred_revenue"].apply(lambda v: f"${v:,.0f}" if pd.notna(v) else "—"),
+            }).T
+            st.dataframe(_bold_headers(by_year), use_container_width=True)
+
+        with row_a_col2:
+            st.markdown(f"**Key Drivers — {latest['period']}**")
+            driver_fields = [
+                ("New Business (ARR)", "new_arr_live"), ("Expansion", "expansion_arr"),
+                ("Contraction", "contraction_arr"), ("Churn", "churned_arr"),
+            ]
+            drivers_rows = []
+            for d_label, d_field in driver_fields:
+                impact = latest_forecast_row[d_field]
+                pct = _pct_change(impact, year1_row[d_field])
+                drivers_rows.append({
+                    "Driver": d_label,
+                    "Impact on ARR": f"${impact:,.0f}" if pd.notna(impact) else "—",
+                    "vs Year 1": f"{pct:+.1f}%" if pct is not None else "—",
+                })
+            st.dataframe(_bold_headers(pd.DataFrame(drivers_rows).set_index("Driver")), use_container_width=True)
+
+        with row_a_col3:
+            st.markdown(f"**ARR Bridge — {latest['period']}**")
+            wf_labels = ["Begin", "New ARR", "Expand", "Contract", "Churn", "Other", "End"]
+            wf_values = [latest["beginning_arr"], latest["new_arr_live"], latest["expansion_arr"],
+                         -latest["contraction_arr"], -latest["churned_arr"], latest["other_boundary_effect"], latest["ending_arr"]]
+            _wf_fig = make_waterfall(wf_labels, wf_values, "")
+            _wf_fig.update_layout(height=300, margin=dict(t=10, b=30, l=40, r=10))
+            st.plotly_chart(_wf_fig, use_container_width=True)
+
+        # ---------------------------------------------------------------
+        # Row B: ARR Actuals → Forecast chart | Executive Takeaway
+        # ---------------------------------------------------------------
+        row_b_col1, row_b_col2 = st.columns([1.6, 1])
+
+        with row_b_col1:
+            _has_actuals = historical_annual is not None and len(historical_annual) > 0
+            if _has_actuals:
                 title_col, filter_col = st.columns([2, 1])
                 title_col.caption("ARR — Actuals → Forecast")
                 arr_view = filter_col.selectbox(
@@ -915,9 +1202,6 @@ if mode == "Full Company (All Segments)":
                 if arr_view == "All Markets":
                     chart_annual = combined_annual
                 else:
-                    # Single-market view: actuals from an Existing Book extract
-                    # are company-wide, not attributable to one market, so this
-                    # branch shows forecast only (no "Actual" bars).
                     chart_annual = aggregate_periods(
                         results[arr_view]["phase2_df"], results[arr_view]["renewals_df"], None,
                         results[arr_view]["all_contracts"], num_months, period_months=12,
@@ -929,42 +1213,91 @@ if mode == "Full Company (All Segments)":
                 forecast_rows = chart_annual[chart_annual["type"] == "Forecast"]
                 if len(actual_rows) > 0:
                     arr_fig.add_trace(go.Bar(x=actual_rows["period"], y=actual_rows["ending_arr"],
-                                              name="Actual", marker_color="#1f77b4"))
+                                              name="Actual", marker_color="#163A63"))
                 if len(forecast_rows) > 0:
                     arr_fig.add_trace(go.Bar(x=forecast_rows["period"], y=forecast_rows["ending_arr"],
-                                              name="Forecast", marker_color="#aec7e8"))
+                                              name="Forecast", marker_color="#93C5FD"))
                 arr_fig.update_layout(showlegend=True, height=320, margin=dict(t=20, b=20))
-                st.plotly_chart(arr_fig, width='stretch')
+                st.plotly_chart(arr_fig, use_container_width=True)
+            else:
+                title_col, filter_col = st.columns([2, 1])
+                title_col.caption("ARR Trajectory — Monthly")
+                arr_view = filter_col.selectbox(
+                    "View", ["All Markets"] + selected_markets, key="arr_chart_view",
+                    label_visibility="collapsed",
+                    help="Display-only filter for this chart — doesn't affect the hero tiles, other tabs, or the 'Markets to include' selection above.",
+                )
+                if arr_view == "All Markets":
+                    chart_series = phase2_df["live_arr"]
+                else:
+                    chart_series = results[arr_view]["phase2_df"]["live_arr"]
 
-            with drivers_col:
-                st.caption(f"Key Drivers — {latest['period']}")
-                year1_row, latest_forecast_row = annual.iloc[0], annual.iloc[-1]
+                arr_fig = go.Figure(go.Scatter(
+                    x=list(range(1, len(chart_series) + 1)), y=chart_series,
+                    mode="lines", line=dict(color="#2563EB", width=2.5),
+                    fill="tozeroy", fillcolor="rgba(37, 99, 235, 0.08)",
+                    name="Live ARR",
+                ))
+                arr_fig.update_layout(
+                    showlegend=False, height=320, margin=dict(t=20, b=20),
+                    xaxis_title="Month", yaxis_title="Live ARR ($)",
+                    plot_bgcolor="white", paper_bgcolor="white",
+                    xaxis=dict(gridcolor="#F1F5F9"), yaxis=dict(gridcolor="#F1F5F9"),
+                )
+                st.plotly_chart(arr_fig, use_container_width=True)
 
-                def _pct_change(new, old):
-                    if old in (None, 0) or pd.isna(old) or pd.isna(new):
-                        return None
-                    return (new - old) / abs(old) * 100
+        with row_b_col2:
+            # Executive Takeaway — deterministic narrative, no LLM call
+            _NRR_STRONG_THRESHOLD = 110.0
+            _NRR_STABLE_FLOOR = 95.0
+            _DEFERRED_REV_VISIBILITY_THRESHOLD = 0.40
 
-                driver_fields = [
-                    ("New Business (ARR)", "new_arr_live"), ("Expansion", "expansion_arr"),
-                    ("Contraction", "contraction_arr"), ("Churn", "churned_arr"),
-                ]
-                drivers_rows = []
-                for d_label, d_field in driver_fields:
-                    impact = latest_forecast_row[d_field]
-                    pct = _pct_change(impact, year1_row[d_field])
-                    drivers_rows.append({
-                        "Driver": d_label,
-                        "Impact on ARR": f"${impact:,.0f}" if pd.notna(impact) else "—",
-                        "vs Year 1": f"{pct:+.1f}%" if pct is not None else "—",
-                    })
-                st.dataframe(pd.DataFrame(drivers_rows).set_index("Driver"), width='stretch')
+            ending_arr_val = latest["ending_arr"]
+            nrr_val = latest["nrr_pct"]
+            new_biz_impact = abs(latest_forecast_row["new_arr_live"]) if pd.notna(latest_forecast_row["new_arr_live"]) else 0
+            expansion_impact = abs(latest_forecast_row["expansion_arr"]) if pd.notna(latest_forecast_row["expansion_arr"]) else 0
 
-        st.caption(f"ARR Bridge — {latest['period']}")
-        wf_labels = ["Beginning<br>ARR", "New ARR<br>(Went Live)", "Expansion", "Contraction", "Churn", "Other /<br>Boundary", "Ending<br>ARR"]
-        wf_values = [latest["beginning_arr"], latest["new_arr_live"], latest["expansion_arr"],
-                     -latest["contraction_arr"], -latest["churned_arr"], latest["other_boundary_effect"], latest["ending_arr"]]
-        st.plotly_chart(make_waterfall(wf_labels, wf_values, ""), width='stretch')
+            if new_biz_impact >= expansion_impact:
+                primary_driver_label = "new business"
+                primary_driver_impact = latest_forecast_row["new_arr_live"]
+            else:
+                primary_driver_label = "expansion"
+                primary_driver_impact = latest_forecast_row["expansion_arr"]
+
+            if nrr_val is not None and not pd.isna(nrr_val):
+                if nrr_val >= _NRR_STRONG_THRESHOLD:
+                    nrr_classification = "strong"
+                elif nrr_val >= _NRR_STABLE_FLOOR:
+                    nrr_classification = "stable"
+                else:
+                    nrr_classification = "declining"
+                nrr_display = f"{nrr_val:.1f}%"
+            else:
+                nrr_classification = "unmeasured"
+                nrr_display = "N/A"
+
+            deferred_rev_val = ending_deferred_revenue if ending_deferred_revenue is not None and not pd.isna(ending_deferred_revenue) else 0
+            if ending_arr_val and not pd.isna(ending_arr_val) and ending_arr_val > 0:
+                deferred_ratio = deferred_rev_val / ending_arr_val
+            else:
+                deferred_ratio = 0
+            visibility_classification = "strong forward revenue visibility" if deferred_ratio >= _DEFERRED_REV_VISIBILITY_THRESHOLD else "limited forward revenue visibility"
+
+            takeaway_text = (
+                f"ARR is projected to grow to {_fmt_millions(ending_arr_val)} in {latest['period']}, "
+                f"driven primarily by {_fmt_millions(abs(primary_driver_impact))} of {primary_driver_label}. "
+                f"Blended NRR of {nrr_display} indicates {nrr_classification} retention, "
+                f"while deferred revenue of {_fmt_millions(deferred_rev_val)} provides {visibility_classification}."
+            )
+
+            st.markdown(
+                f'<div style="background-color: #F0FDF4; border-left: 4px solid #16A34A; border-radius: 8px; '
+                f'padding: 16px 20px; margin-top: 8px;">'
+                f'<p style="color: #15803D; font-size: 13px; font-weight: 600; margin: 0 0 8px 0;">💡 Executive Takeaway</p>'
+                f'<p style="color: #1A2233; font-size: 14px; line-height: 1.6; margin: 0;">{takeaway_text}</p>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
         with st.expander("View underlying data"):
             st.caption(
@@ -976,7 +1309,7 @@ if mode == "Full Company (All Segments)":
                 "has no NRR/churn (no prior-year baseline to compare against)."
             )
             st.markdown("**Annual (Actual + Forecast)**")
-            st.dataframe(style_wide(combined_annual.set_index("period").T), width='stretch')
+            st.dataframe(_bold_headers(style_wide(combined_annual.set_index("period").T)), width='stretch')
 
 
             st.markdown("**Quarterly**")
@@ -990,7 +1323,7 @@ if mode == "Full Company (All Segments)":
                 year_quarters = quarterly[quarterly["period"].str.startswith(f"Y{y+1}-")]
                 if len(year_quarters) > 0:
                     st.markdown(f"*Year {y+1}*")
-                    st.dataframe(style_wide(year_quarters.set_index("period").T), width='stretch')
+                    st.dataframe(_bold_headers(style_wide(year_quarters.set_index("period").T)), width='stretch')
 
     if existing_book_df is not None:
         with tabs[1]:
@@ -1021,7 +1354,7 @@ if mode == "Full Company (All Segments)":
                     "(smooth monthly runoff, no individual contract dates). New business runs through the "
                     "full Bowtie engine (Phase 1-3) with real deferred revenue mechanics."
                 )
-                st.dataframe(style_wide(wide(combined)), width='stretch')
+                st.dataframe(_bold_headers(style_wide(wide(combined))), width='stretch')
 
     with tabs[0 + tab_offset]:
         st.subheader("Bookings: Capacity vs. Demand Constraint")
@@ -1050,10 +1383,10 @@ if mode == "Full Company (All Segments)":
             st.caption("Execution Efficiency, Seasonal Multiplier and Pipeline Coverage aren't shown in the combined "
                        "view — they're set per market and have no single meaningful combined value. See each market below.")
             st.markdown("**Combined (selected markets)**")
-            st.dataframe(style_wide(wide(phase1_df)), width='stretch')
+            st.dataframe(_bold_headers(style_wide(wide(phase1_df))), width='stretch')
             for m in selected_markets:
                 st.markdown(f"**{m}**")
-                st.dataframe(style_wide(wide(results[m]["phase1_df"])), width='stretch')
+                st.dataframe(_bold_headers(style_wide(wide(results[m]["phase1_df"]))), width='stretch')
 
     with tabs[1 + tab_offset]:
         st.subheader("Live ARR Trajectory")
@@ -1072,10 +1405,10 @@ if mode == "Full Company (All Segments)":
 
         with st.expander("View underlying data"):
             st.markdown("**Combined (selected markets)**")
-            st.dataframe(style_wide(wide(phase2_df)), width='stretch')
+            st.dataframe(_bold_headers(style_wide(wide(phase2_df))), width='stretch')
             for m in selected_markets:
                 st.markdown(f"**{m}**")
-                st.dataframe(style_wide(wide(results[m]["phase2_df"])), width='stretch')
+                st.dataframe(_bold_headers(style_wide(wide(results[m]["phase2_df"]))), width='stretch')
 
     with tabs[2 + tab_offset]:
         st.subheader("Renewal Cohort Summary")
@@ -1088,12 +1421,12 @@ if mode == "Full Company (All Segments)":
             st.info(summary["nrr_benchmark_check"])
             with st.expander("View underlying data"):
                 st.markdown("**Combined (selected markets)**")
-                st.dataframe(style_wide(wide(combine_renewals_for_display(renewals_df))), width='stretch')
+                st.dataframe(_bold_headers(style_wide(wide(combine_renewals_for_display(renewals_df)))), width='stretch')
                 for m in selected_markets:
                     market_renewals = results[m]["renewals_df"]
                     if len(market_renewals) > 0:
                         st.markdown(f"**{m}**")
-                        st.dataframe(style_wide(wide(market_renewals)), width='stretch')
+                        st.dataframe(_bold_headers(style_wide(wide(market_renewals))), width='stretch')
         else:
             st.info("No renewal events occurred — scenario length may be shorter than the contract term.")
 
@@ -1101,29 +1434,19 @@ if mode == "Full Company (All Segments)":
 # COMPARE TWO SCENARIOS MODE
 # ===========================================================================
 else:
-    # User-editable scenario names — let labels read as actual business
-    # scenarios ("Base Plan" vs. "Aggressive Hiring") instead of the generic
-    # "Scenario A"/"Scenario B" everywhere below reads from these two
-    # variables now, so a custom name propagates through every chart, table
-    # and metric label in this mode.
     name1, name2 = st.columns(2)
     scenario_a_name = name1.text_input("Scenario A label", "Scenario A — Base Plan", key="scenario_a_label")
     scenario_b_name = name2.text_input("Scenario B label", "Scenario B — Alternative Plan", key="scenario_b_label")
 
     with st.expander(scenario_a_name, expanded=True):
-        cfg_a = render_inputs("a", scenario_a_name)
+        cfg_a = render_inputs("a", scenario_a_name, num_months_default=global_horizon, show_horizon=False, show_gross_margin=False)
+        cfg_a["gross_margin_pct"] = global_margin
     with st.expander(scenario_b_name, expanded=True):
-        cfg_b = render_inputs("b", scenario_b_name)
+        cfg_b = render_inputs("b", scenario_b_name, num_months_default=global_horizon, show_horizon=False, show_gross_margin=False)
+        cfg_b["gross_margin_pct"] = global_margin
 
-    # Both scenarios must share one horizon for the bridge math to mean
-    # anything — bridging one scenario's ending ARR against the other's
-    # from two different-length windows would be comparing apples to
-    # oranges. Scenario A's horizon governs; forced explicitly here rather
-    # than just hoping the user sets both fields the same.
-    if cfg_a["num_months"] != cfg_b["num_months"]:
-        st.info(f"{scenario_a_name}'s horizon ({cfg_a['num_months']} months) governs both scenarios "
-                f"for a valid comparison — {scenario_b_name}'s horizon setting is ignored.")
-    num_months = cfg_a["num_months"]
+    num_months = global_horizon
+    cfg_a["num_months"] = num_months
     cfg_b["num_months"] = num_months
 
     try:
@@ -1186,7 +1509,7 @@ else:
             {"Metric": "Capacity Cost", col_a_label: _fmt_dollar(capacity_cost_a), col_b_label: _fmt_dollar(capacity_cost_b),
              "Δ (B − A)": _fmt_dollar(capacity_cost_b - capacity_cost_a)},
         ])
-        st.dataframe(summary_table.set_index("Metric"), width='stretch')
+        st.dataframe(_bold_headers(summary_table.set_index("Metric")), width='stretch')
         st.caption("Ending ARR, Recognized Revenue and NRR reflect the latest full year; Capacity Cost is cumulative over the full horizon.")
 
         st.divider()
@@ -1241,8 +1564,8 @@ else:
     with tab3:
         st.caption("Tables shown with months as columns, metrics as rows.")
         st.subheader(f"{scenario_a_name} — Phase 2 Output")
-        st.dataframe(style_wide(wide(p2a)), width='stretch')
+        st.dataframe(_bold_headers(style_wide(wide(p2a))), width='stretch')
         st.subheader(f"{scenario_b_name} — Phase 2 Output")
-        st.dataframe(style_wide(wide(p2b)), width='stretch')
+        st.dataframe(_bold_headers(style_wide(wide(p2b))), width='stretch')
 
 st.caption("Built on the Bowtie Model (Winning by Design). All math is deterministic — no randomized variables anywhere in this model.")
