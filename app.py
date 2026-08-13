@@ -17,6 +17,17 @@ from saas_metrics import aggregate_periods
 from financial_model_export import generate_multi_pod_workbook_bytes
 
 st.set_page_config(page_title="Revenue Architecture Model", layout="wide")
+
+# Tighter number inputs — Streamlit stretches them to fill their column,
+# which looks bulky once columns are wide (desktop, 4-6 per row). Caps
+# width so short numbers don't sit in a lot of empty box.
+st.markdown("""
+<style>
+    div[data-testid="stNumberInput"] input { max-width: 140px; }
+    div[data-testid="stNumberInput"] { max-width: 180px; }
+</style>
+""", unsafe_allow_html=True)
+
 st.title("Revenue Architecture — Pipeline, Recognition & Renewal Model")
 st.caption("Bowtie Model (Winning by Design) — deterministic, no randomization. Every number traces to an explicit input.")
 
@@ -251,14 +262,13 @@ def render_inputs(key: str, label: str, num_months_default: int = 24) -> dict:
     win_self = e4.slider("Win rate — self-sourced", 0.0, 1.0, 0.35, key=f"{key}_ws")
 
     st.caption("Contract & Renewal")
-    f1, f2, f3, f4, f5 = st.columns(5)
+    f1, f2, f3, f4, f5, f6 = st.columns(6)
     contract_term = f1.number_input("Term (mo)", 1, 60, 12, key=f"{key}_term")
     implementation_lag = f2.number_input("Impl. lag (mo)", 0, 24, 2, key=f"{key}_lag")
     churn_rate = f3.slider("Churn %", 0.0, 1.0, 0.12, key=f"{key}_churn")
     expansion_rate = f4.slider("Expansion %", 0.0, 1.0, 0.18, key=f"{key}_exp")
     contraction_rate = f5.slider("Contraction %", 0.0, 1.0, 0.03, key=f"{key}_contr")
-
-    execution_efficiency = st.slider("Execution efficiency", 0.0, 1.5, 1.0, key=f"{key}_exec")
+    execution_efficiency = f6.slider("Exec. efficiency", 0.0, 1.5, 1.0, key=f"{key}_exec")
 
     # --- Advanced: comp breakdown, hiring cadence, custom schedules,
     # seasonality, PS fee. Collapsed by default — a smart comp default is
@@ -416,69 +426,74 @@ if mode == "Single Scenario":
     # EXISTING CUSTOMER BOOK (optional) — top-line ARR/revenue overlay,
     # NOT run through the Contract engine (no individual contract dates
     # available from a revenue extract). Runs alongside new business.
+    # Lives in the main area, not a sidebar — nothing in this app should
+    # sit in a separate vertical pane the assumptions grid doesn't.
     # -----------------------------------------------------------------
-    st.sidebar.subheader("Existing Customer Book (optional)")
-    include_existing = st.sidebar.checkbox("Include existing customer book", value=False)
-
     existing_book_df = None
     derived_metrics = None
     historical_annual = None
 
+    ceb1, ceb2 = st.columns([3, 1])
+    with ceb1:
+        include_existing = st.checkbox("Include existing customer book (optional)", value=False)
+    with ceb2:
+        gross_margin_pct = st.slider("Gross margin % (for LTV)", 0.0, 1.0, 0.75)
+
     if include_existing:
-        uploaded = st.sidebar.file_uploader("Upload customer revenue extract (CSV or Excel)", type=["csv", "xlsx"])
-        st.sidebar.caption("Long format expected: one row per customer per month (customer, month, revenue). "
-                            "At least 13 months of history needed to derive a trailing-12-month comparison.")
+        with st.expander("Existing Customer Book", expanded=True):
+            uploaded = st.file_uploader("Upload customer revenue extract (CSV or Excel)", type=["csv", "xlsx"])
+            st.caption("Long format expected: one row per customer per month (customer, month, revenue). "
+                       "At least 13 months of history needed to derive a trailing-12-month comparison.")
 
-        if uploaded is not None:
-            try:
-                raw_df = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
-            except Exception as e:
-                st.sidebar.error(f"Couldn't read file: {e}")
-                raw_df = None
-
-            if raw_df is not None:
-                st.sidebar.caption("Map your columns:")
-                cols = list(raw_df.columns)
-                customer_col = st.sidebar.selectbox("Customer column", cols, index=0)
-                month_col = st.sidebar.selectbox("Month column", cols, index=min(1, len(cols) - 1))
-                revenue_col = st.sidebar.selectbox("Revenue column", cols, index=min(2, len(cols) - 1))
-                lookback = st.sidebar.number_input("Lookback window (months)", 1, 24, 12)
-
+            if uploaded is not None:
                 try:
-                    matrix = load_customer_revenue_extract(raw_df, customer_col, month_col, revenue_col)
-                    derived_metrics = derive_book_metrics(matrix, lookback_months=lookback)
+                    raw_df = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
                 except Exception as e:
-                    st.sidebar.error(f"Couldn't derive metrics: {e}")
-                    derived_metrics = None
+                    st.error(f"Couldn't read file: {e}")
+                    raw_df = None
 
-                if derived_metrics is not None:
-                    st.sidebar.success(
-                        f"Derived NRR: {derived_metrics.nrr_pct}% "
-                        f"({derived_metrics.customers_matched} matched, {derived_metrics.customers_churned} churned)"
-                    )
-                    historical_annual = derive_annual_history(matrix)
+                if raw_df is not None:
+                    st.caption("Map your columns:")
+                    cols = list(raw_df.columns)
+                    mc1, mc2, mc3, mc4 = st.columns(4)
+                    customer_col = mc1.selectbox("Customer column", cols, index=0)
+                    month_col = mc2.selectbox("Month column", cols, index=min(1, len(cols) - 1))
+                    revenue_col = mc3.selectbox("Revenue column", cols, index=min(2, len(cols) - 1))
+                    lookback = mc4.number_input("Lookback (months)", 1, 24, 12)
 
-                    override = st.sidebar.checkbox("Override derived rates manually", value=False)
-                    if override:
-                        eb_churn = st.sidebar.slider("Existing book — annual churn", 0.0, 1.0, derived_metrics.implied_annual_churn_rate or 0.10)
-                        eb_expansion = st.sidebar.slider("Existing book — annual expansion", 0.0, 1.0, derived_metrics.implied_annual_expansion_rate or 0.10)
-                        eb_contraction = st.sidebar.slider("Existing book — annual contraction", 0.0, 1.0, derived_metrics.implied_annual_contraction_rate or 0.02)
-                    else:
-                        eb_churn = derived_metrics.implied_annual_churn_rate or 0.0
-                        eb_expansion = derived_metrics.implied_annual_expansion_rate or 0.0
-                        eb_contraction = derived_metrics.implied_annual_contraction_rate or 0.0
+                    try:
+                        matrix = load_customer_revenue_extract(raw_df, customer_col, month_col, revenue_col)
+                        derived_metrics = derive_book_metrics(matrix, lookback_months=lookback)
+                    except Exception as e:
+                        st.error(f"Couldn't derive metrics: {e}")
+                        derived_metrics = None
 
-                    existing_book_df = project_existing_book_runoff(
-                        base_arr=derived_metrics.base_arr,
-                        annual_churn_rate=eb_churn,
-                        annual_expansion_rate=eb_expansion,
-                        annual_contraction_rate=eb_contraction,
-                        num_months=num_months,
-                        base_logo_count=derived_metrics.base_logo_count,
-                    )
+                    if derived_metrics is not None:
+                        st.success(
+                            f"Derived NRR: {derived_metrics.nrr_pct}% "
+                            f"({derived_metrics.customers_matched} matched, {derived_metrics.customers_churned} churned)"
+                        )
+                        historical_annual = derive_annual_history(matrix)
 
-    st.sidebar.subheader("SaaS Metrics Dashboard")
-    gross_margin_pct = st.sidebar.slider("Gross margin % (for LTV)", 0.0, 1.0, 0.75)
+                        override = st.checkbox("Override derived rates manually", value=False)
+                        if override:
+                            oc1, oc2, oc3 = st.columns(3)
+                            eb_churn = oc1.slider("Existing book — annual churn", 0.0, 1.0, derived_metrics.implied_annual_churn_rate or 0.10)
+                            eb_expansion = oc2.slider("Existing book — annual expansion", 0.0, 1.0, derived_metrics.implied_annual_expansion_rate or 0.10)
+                            eb_contraction = oc3.slider("Existing book — annual contraction", 0.0, 1.0, derived_metrics.implied_annual_contraction_rate or 0.02)
+                        else:
+                            eb_churn = derived_metrics.implied_annual_churn_rate or 0.0
+                            eb_expansion = derived_metrics.implied_annual_expansion_rate or 0.0
+                            eb_contraction = derived_metrics.implied_annual_contraction_rate or 0.0
+
+                        existing_book_df = project_existing_book_runoff(
+                            base_arr=derived_metrics.base_arr,
+                            annual_churn_rate=eb_churn,
+                            annual_expansion_rate=eb_expansion,
+                            annual_contraction_rate=eb_contraction,
+                            num_months=num_months,
+                            base_logo_count=derived_metrics.base_logo_count,
+                        )
 
     try:
         result = run_full_model(cfg, num_months)
