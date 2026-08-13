@@ -586,20 +586,32 @@ if mode == "Full Company (All Segments)":
                                    help="How many months forward the model projects, starting from month 1 of new bookings. Shared across all 4 markets so the consolidated total is coherent.")
     gross_margin_pct = fc2.number_input("Gross margin % (for LTV)", 0.0, 1.0, 0.75, step=0.01, key="fc_gm",
                                          help="Used for LTV. Blended gross margin on subscription revenue. Used only in the LTV formula: LTV = ARPA × Gross Margin ÷ Annual Churn Rate.")
+    st.caption("Each market box below shows its own live AE Quota Attainment readout, recalculated from that "
+               "box's current inputs. Full definitions of Capacity/Demand-Constrained Bookings, Theoretical "
+               "Bookings, Execution Efficiency and Binding Constraint are in the 📈 Pipeline & Capacity tab below.")
 
     cfgs = {}
     for market in MARKET_NAMES:
         with st.expander(market, expanded=True):
             cfg_m = render_inputs(MARKET_KEYS[market], market, num_months_default=num_months,
                                    fixed_segment=market, show_horizon=False)
+            # Recomputed from THIS box's current inputs every rerun (headcount,
+            # quota, SQL volume, win rates, etc. all feed into it) — not a
+            # static note. Shown as an st.info box, not just caption text, so
+            # it reads as a distinct output rather than blending into the
+            # surrounding assumption labels.
             att = attainment_summary(cfg_m, num_months)
             if att["avg_attainment_pct"] is not None:
-                st.caption(
-                    f"Avg AE Attainment: {att['avg_attainment_pct']:.1f}% · "
-                    f"Capacity-bound in {att['months_capacity_bound']}/{att['total_months']} months. "
-                    + ("AEs are fully utilized — more pipeline alone won't grow bookings here."
+                st.info(
+                    f"**{att['avg_attainment_pct']:.1f}%** average AE capacity utilization "
+                    f"(actual bookings ÷ AE capacity) · Capacity-bound in "
+                    f"{att['months_capacity_bound']}/{att['total_months']} months.\n\n"
+                    + ("AEs are fully utilized — headcount/quota, not pipeline, is the limiting factor here. "
+                       "More BDR/marketing SQLs alone won't grow bookings until AE capacity increases."
                        if att["months_capacity_bound"] == att["total_months"]
-                       else "AEs have slack capacity — more pipeline (marketing/BDR) can still convert to bookings.")
+                       else "AEs have slack capacity in some months — more pipeline (marketing/BDR) can still "
+                            "convert to bookings without adding headcount."),
+                    icon="📊", title="AE Quota Attainment",
                 )
             cfgs[market] = cfg_m
 
@@ -811,13 +823,14 @@ if mode == "Full Company (All Segments)":
             m3.metric("Customer LTV", f"${latest['ltv']:,.0f}" if latest["ltv"] is not None else "—")
 
         st.markdown("**By Year**")
+        _by_year_src = combined_annual.set_index("period")
         by_year = pd.DataFrame({
-            "Ending ARR": combined_annual["ending_arr"].apply(lambda v: f"${v:,.0f}" if pd.notna(v) else "—"),
-            "Recognized Revenue": combined_annual["revenue"].apply(lambda v: f"${v:,.0f}" if pd.notna(v) else "—"),
-            "NRR": combined_annual["nrr_pct"].apply(lambda v: f"{v:.1f}%" if pd.notna(v) else "—"),
-            "Live Accounts": combined_annual["ending_logos"].apply(lambda v: f"{int(v):,}" if pd.notna(v) else "—"),
-            "Deferred Revenue": combined_annual["deferred_revenue"].apply(lambda v: f"${v:,.0f}" if pd.notna(v) else "—"),
-        }, index=combined_annual["period"]).T
+            "Ending ARR": _by_year_src["ending_arr"].apply(lambda v: f"${v:,.0f}" if pd.notna(v) else "—"),
+            "Recognized Revenue": _by_year_src["revenue"].apply(lambda v: f"${v:,.0f}" if pd.notna(v) else "—"),
+            "NRR": _by_year_src["nrr_pct"].apply(lambda v: f"{v:.1f}%" if pd.notna(v) else "—"),
+            "Live Accounts": _by_year_src["ending_logos"].apply(lambda v: f"{int(v):,}" if pd.notna(v) else "—"),
+            "Deferred Revenue": _by_year_src["deferred_revenue"].apply(lambda v: f"${v:,.0f}" if pd.notna(v) else "—"),
+        }).T
         st.dataframe(by_year, width='stretch')
 
         st.divider()
