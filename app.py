@@ -153,65 +153,65 @@ def style_wide(df: pd.DataFrame, relabel: bool = True) -> pd.DataFrame:
 _PRESET_DEFAULTS = {
     "SMB": dict(
         existing_aes=0, existing_bdrs=0, num_aes=4, num_bdrs=6, cadence=2,
-        ae_base=60000, ae_var=60000, ae_quota=650000,
-        bdr_base=50000, bdr_var=25000, bdr_sql=8,
-        leads=1200, l2m=0.35, m2s=0.30, selfsrc=1.0,
+        ae_quota_m=0.65, bdr_sql=8,
+        marketing_sqls=126.0, selfsrc=1.0,  # was leads=1200*0.35*0.30 — preserved effective SQL output
         deal=6000, wm=0.28, wb=0.22, ws=0.30,
         term=12, lag=1, psfee=0.0, churn=0.15, exp=0.12, contr=0.04,
     ),
     "Mid-Market": dict(
         existing_aes=0, existing_bdrs=0, num_aes=3, num_bdrs=2, cadence=3,
-        ae_base=95000, ae_var=95000, ae_quota=1100000,
-        bdr_base=55000, bdr_var=30000, bdr_sql=6,
-        leads=500, l2m=0.30, m2s=0.25, selfsrc=2.0,
+        ae_quota_m=1.1, bdr_sql=6,
+        marketing_sqls=37.5, selfsrc=2.0,  # was leads=500*0.30*0.25
         deal=18000, wm=0.25, wb=0.20, ws=0.35,
         term=12, lag=2, psfee=0.0, churn=0.12, exp=0.18, contr=0.03,
     ),
     "Enterprise": dict(
         existing_aes=0, existing_bdrs=0, num_aes=2, num_bdrs=3, cadence=4,
-        ae_base=140000, ae_var=140000, ae_quota=1700000,
-        bdr_base=65000, bdr_var=35000, bdr_sql=4,
-        leads=150, l2m=0.25, m2s=0.35, selfsrc=1.5,
+        ae_quota_m=1.7, bdr_sql=4,
+        marketing_sqls=13.1, selfsrc=1.5,  # was leads=150*0.25*0.35
         deal=75000, wm=0.20, wb=0.15, ws=0.30,
         term=12, lag=4, psfee=0.10, churn=0.08, exp=0.20, contr=0.02,
     ),
     "Inbound": dict(
         existing_aes=0, existing_bdrs=0, num_aes=2, num_bdrs=0, cadence=3,
-        ae_base=70000, ae_var=50000, ae_quota=600000,
-        bdr_base=55000, bdr_var=30000, bdr_sql=6,  # unused — 0 BDRs on this segment
-        leads=2500, l2m=0.45, m2s=0.35, selfsrc=0.0,
+        ae_quota_m=0.6, bdr_sql=6,  # bdr_sql unused — 0 BDRs on this segment
+        marketing_sqls=393.75, selfsrc=0.0,  # was leads=2500*0.45*0.35
         deal=3500, wm=0.32, wb=0.0, ws=0.0,
         term=12, lag=1, psfee=0.0, churn=0.18, exp=0.10, contr=0.05,
     ),
 }
+# Comp (ae_base/ae_var/bdr_base/bdr_var) intentionally not in presets — it now
+# lives in the Advanced section with a smart default derived from quota,
+# consistent with keeping comp detail out of the headline assumptions.
 
 
 _PRESET_SUFFIX_TO_CFG_FIELD = {
     "existing_aes": "num_existing_aes", "existing_bdrs": "num_existing_bdrs",
     "num_aes": "num_aes", "num_bdrs": "num_bdrs", "cadence": "hiring_cadence",
-    "ae_base": "ae_base", "ae_var": "ae_variable", "ae_quota": "ae_quota",
-    "bdr_base": "bdr_base", "bdr_var": "bdr_variable", "bdr_sql": "bdr_monthly_sql_quota",
-    "leads": "monthly_leads", "l2m": "lead_to_mql", "m2s": "mql_to_sql", "selfsrc": "ae_self_sourced",
+    "bdr_sql": "bdr_monthly_sql_quota",
+    "marketing_sqls": "marketing_sqls", "selfsrc": "ae_self_sourced",
     "deal": "avg_deal_size", "wm": "win_marketing", "wb": "win_bdr", "ws": "win_self",
     "term": "contract_term", "lag": "implementation_lag", "psfee": "ps_fee_pct",
     "churn": "churn_rate", "exp": "expansion_rate", "contr": "contraction_rate",
+    # ae_quota_m handled specially (unit conversion, millions -> raw $) wherever
+    # this mapping is used for cfg construction — see download section below.
 }
 
 
-def render_inputs(key: str, label: str) -> dict:
-    st.sidebar.subheader(label)
+def render_inputs(key: str, label: str, num_months_default: int = 24) -> dict:
+    st.subheader(label)
 
-    pod_preset = st.sidebar.selectbox(
-        "Pod name", ["SMB", "Mid-Market", "Enterprise", "Inbound", "Other (custom)"],
+    top1, top2 = st.columns([2, 1])
+    pod_preset = top1.selectbox(
+        "Segment", ["SMB", "Mid-Market", "Enterprise", "Inbound", "Other (custom)"],
         index=1, key=f"{key}_pod_preset",
     )
+    num_months = top2.number_input("Horizon (months)", 6, 48, num_months_default, key=f"{key}_num_months")
 
     # Detect a preset CHANGE and inject its defaults into session_state
     # *before* the affected widgets are created below — Streamlit widgets
     # read their initial value from session_state if already set, ignoring
-    # the value= parameter in code once a key has been touched. Without
-    # this, switching the dropdown only ever changed the pod_name label,
-    # never the actual team/deal/rate assumptions underneath it.
+    # the value= parameter in code once a key has been touched.
     prev_key = f"{key}_applied_preset"
     if st.session_state.get(prev_key) != pod_preset and pod_preset in _PRESET_DEFAULTS:
         for suffix, val in _PRESET_DEFAULTS[pod_preset].items():
@@ -219,107 +219,114 @@ def render_inputs(key: str, label: str) -> dict:
         st.session_state[prev_key] = pod_preset
 
     if pod_preset == "Other (custom)":
-        pod_name = st.sidebar.text_input("Custom pod name", "MidMarket", key=f"{key}_pod_name_custom")
+        pod_name = st.text_input("Custom segment name", "MidMarket", key=f"{key}_pod_name_custom")
     else:
         pod_name = pod_preset
 
-    st.sidebar.caption("Team — Existing (already on the team, fully productive from month 1)")
-    num_existing_aes = st.sidebar.number_input("Existing AEs", 0, 100, 0, key=f"{key}_existing_aes")
-    num_existing_bdrs = st.sidebar.number_input("Existing BDRs", 0, 100, 0, key=f"{key}_existing_bdrs")
+    # --- Horizontal assumptions grid — headline inputs only. Matches how a
+    # real financial model keeps assumptions in one visible band (top row
+    # or frozen pane), not buried in a long vertical sidebar. Secondary/
+    # detail inputs (comp breakdown, hiring cadence, seasonality) live in
+    # the collapsed "Advanced" section below, the same way a real model
+    # keeps headcount/comp detail on its own separate sheet. ---
+    st.caption("Team")
+    c1, c2, c3, c4 = st.columns(4)
+    num_existing_aes = c1.number_input("Existing AEs", 0, 100, 0, key=f"{key}_existing_aes")
+    num_aes = c2.number_input("New AE hires", 0, 50, 3, key=f"{key}_num_aes")
+    num_existing_bdrs = c3.number_input("Existing BDRs", 0, 100, 0, key=f"{key}_existing_bdrs")
+    num_bdrs = c4.number_input("New BDR hires", 0, 50, 2, key=f"{key}_num_bdrs")
 
-    st.sidebar.caption("Team — New Hires (ramp normally over 3 months)")
-    num_aes = st.sidebar.number_input("New AE hires", 0, 50, 3, key=f"{key}_num_aes")
-    num_bdrs = st.sidebar.number_input("New BDR hires", 0, 50, 2, key=f"{key}_num_bdrs")
-    hiring_cadence = st.sidebar.number_input("Default hiring cadence (months between hires)", 1, 12, 3, key=f"{key}_cadence")
+    st.caption("Quota & Demand")
+    d1, d2, d3, d4 = st.columns(4)
+    ae_quota_millions = d1.number_input("AE annual quota ($M)", 0.0, 10.0, 1.1, step=0.1, key=f"{key}_ae_quota_m")
+    bdr_sql = d2.number_input("BDR SQLs/month", 0, 50, 6, key=f"{key}_bdr_sql")
+    marketing_sqls = d3.number_input("Marketing SQLs/month", 0.0, 500.0, 12.0, key=f"{key}_marketing_sqls")
+    ae_self_sourced = d4.number_input("AE self-sourced SQLs/mo", 0.0, 20.0, 2.0, key=f"{key}_selfsrc")
 
-    custom_ae_schedule_raw = st.sidebar.text_input(
-        "Custom AE hire-month schedule (optional, comma-separated)", "",
-        key=f"{key}_ae_custom_sched",
-        help=f"e.g. '0,0,6,6' to hire 2 now and 2 more in month 6. Leave blank to use the "
-             f"default cadence above. Must have exactly {num_aes} entries if used.",
-    )
-    custom_bdr_schedule_raw = st.sidebar.text_input(
-        "Custom BDR hire-month schedule (optional, comma-separated)", "",
-        key=f"{key}_bdr_custom_sched",
-        help=f"Same format as above. Must have exactly {num_bdrs} entries if used.",
-    )
+    st.caption("Deal Economics & Win Rates")
+    e1, e2, e3, e4 = st.columns(4)
+    avg_deal_size = e1.number_input("Avg deal size — TCV ($)", 0, 5_000_000, 18_000, step=1000, key=f"{key}_deal")
+    win_marketing = e2.slider("Win rate — marketing", 0.0, 1.0, 0.25, key=f"{key}_wm")
+    win_bdr = e3.slider("Win rate — BDR", 0.0, 1.0, 0.20, key=f"{key}_wb")
+    win_self = e4.slider("Win rate — self-sourced", 0.0, 1.0, 0.35, key=f"{key}_ws")
 
-    ae_hire_months = None
-    if custom_ae_schedule_raw.strip():
-        try:
-            ae_hire_months = [int(x.strip()) for x in custom_ae_schedule_raw.split(",")]
-            if len(ae_hire_months) != num_aes:
-                st.sidebar.error(f"Custom AE schedule has {len(ae_hire_months)} entries, need {num_aes}. Using default cadence instead.")
-                ae_hire_months = None
-        except ValueError:
-            st.sidebar.error("Couldn't parse custom AE schedule (use whole numbers separated by commas). Using default cadence instead.")
+    st.caption("Contract & Renewal")
+    f1, f2, f3, f4, f5 = st.columns(5)
+    contract_term = f1.number_input("Term (mo)", 1, 60, 12, key=f"{key}_term")
+    implementation_lag = f2.number_input("Impl. lag (mo)", 0, 24, 2, key=f"{key}_lag")
+    churn_rate = f3.slider("Churn %", 0.0, 1.0, 0.12, key=f"{key}_churn")
+    expansion_rate = f4.slider("Expansion %", 0.0, 1.0, 0.18, key=f"{key}_exp")
+    contraction_rate = f5.slider("Contraction %", 0.0, 1.0, 0.03, key=f"{key}_contr")
 
-    bdr_hire_months = None
-    if custom_bdr_schedule_raw.strip():
-        try:
-            bdr_hire_months = [int(x.strip()) for x in custom_bdr_schedule_raw.split(",")]
-            if len(bdr_hire_months) != num_bdrs:
-                st.sidebar.error(f"Custom BDR schedule has {len(bdr_hire_months)} entries, need {num_bdrs}. Using default cadence instead.")
-                bdr_hire_months = None
-        except ValueError:
-            st.sidebar.error("Couldn't parse custom BDR schedule (use whole numbers separated by commas). Using default cadence instead.")
+    execution_efficiency = st.slider("Execution efficiency", 0.0, 1.5, 1.0, key=f"{key}_exec")
 
-    st.sidebar.caption("AE Compensation & Quota")
-    ae_base = st.sidebar.number_input("AE annual base ($)", 0, 500_000, 95_000, step=5000, key=f"{key}_ae_base")
-    ae_variable = st.sidebar.number_input("AE annual variable @ 100% ($)", 0, 500_000, 95_000, step=5000, key=f"{key}_ae_var")
-    ae_quota = st.sidebar.number_input("AE annual quota ($)", 0, 5_000_000, 1_100_000, step=50_000, key=f"{key}_ae_quota")
+    # --- Advanced: comp breakdown, hiring cadence, custom schedules,
+    # seasonality, PS fee. Collapsed by default — a smart comp default is
+    # derived from quota so the model runs correctly even if never opened. ---
+    with st.expander("Advanced: Comp, Hiring Schedule, Seasonality"):
+        st.caption("AE comp defaults to a 5.5x quota:OTE split (mid of the healthy 4-6x band) unless overridden.")
+        default_ae_ote = (ae_quota_millions * 1_000_000) / 5.5
+        ac1, ac2 = st.columns(2)
+        ae_base = ac1.number_input("AE annual base ($)", 0, 500_000, int(default_ae_ote / 2), step=5000, key=f"{key}_ae_base")
+        ae_variable = ac2.number_input("AE annual variable @ 100% ($)", 0, 500_000, int(default_ae_ote / 2), step=5000, key=f"{key}_ae_var")
 
-    st.sidebar.caption("BDR Compensation & Quota")
-    bdr_base = st.sidebar.number_input("BDR annual base ($)", 0, 300_000, 55_000, step=5000, key=f"{key}_bdr_base")
-    bdr_variable = st.sidebar.number_input("BDR annual variable @ 100% ($)", 0, 300_000, 30_000, step=5000, key=f"{key}_bdr_var")
-    bdr_monthly_sql_quota = st.sidebar.number_input("BDR monthly SQL quota", 0, 50, 6, key=f"{key}_bdr_sql")
+        bc1, bc2 = st.columns(2)
+        bdr_base = bc1.number_input("BDR annual base ($)", 0, 300_000, 55_000, step=5000, key=f"{key}_bdr_base")
+        bdr_variable = bc2.number_input("BDR annual variable @ 100% ($)", 0, 300_000, 30_000, step=5000, key=f"{key}_bdr_var")
 
-    st.sidebar.caption("Demand")
-    monthly_leads = st.sidebar.number_input("Marketing leads/month", 0, 20_000, 500, key=f"{key}_leads")
-    lead_to_mql = st.sidebar.slider("Lead → MQL rate", 0.0, 1.0, 0.30, key=f"{key}_l2m")
-    mql_to_sql = st.sidebar.slider("MQL → SQL rate", 0.0, 1.0, 0.25, key=f"{key}_m2s")
-    ae_self_sourced = st.sidebar.number_input("AE self-sourced SQLs/month", 0.0, 20.0, 2.0, key=f"{key}_selfsrc")
+        hiring_cadence = st.number_input("Default hiring cadence (months between hires)", 1, 12, 3, key=f"{key}_cadence")
+        custom_ae_schedule_raw = st.text_input(
+            "Custom AE hire-month schedule (optional, comma-separated)", "", key=f"{key}_ae_custom_sched",
+            help=f"e.g. '0,0,6,6'. Must have exactly {num_aes} entries if used.",
+        )
+        custom_bdr_schedule_raw = st.text_input(
+            "Custom BDR hire-month schedule (optional, comma-separated)", "", key=f"{key}_bdr_custom_sched",
+            help=f"Same format. Must have exactly {num_bdrs} entries if used.",
+        )
+        ae_hire_months = None
+        if custom_ae_schedule_raw.strip():
+            try:
+                ae_hire_months = [int(x.strip()) for x in custom_ae_schedule_raw.split(",")]
+                if len(ae_hire_months) != num_aes:
+                    st.error(f"Custom AE schedule has {len(ae_hire_months)} entries, need {num_aes}. Using default cadence.")
+                    ae_hire_months = None
+            except ValueError:
+                st.error("Couldn't parse custom AE schedule. Using default cadence.")
 
-    st.sidebar.caption("Deal Economics")
-    avg_deal_size = st.sidebar.number_input("Avg deal size — TCV ($)", 0, 5_000_000, 18_000, step=1000, key=f"{key}_deal")
-    win_marketing = st.sidebar.slider("Win rate — marketing", 0.0, 1.0, 0.25, key=f"{key}_wm")
-    win_bdr = st.sidebar.slider("Win rate — BDR", 0.0, 1.0, 0.20, key=f"{key}_wb")
-    win_self = st.sidebar.slider("Win rate — self-sourced", 0.0, 1.0, 0.35, key=f"{key}_ws")
+        bdr_hire_months = None
+        if custom_bdr_schedule_raw.strip():
+            try:
+                bdr_hire_months = [int(x.strip()) for x in custom_bdr_schedule_raw.split(",")]
+                if len(bdr_hire_months) != num_bdrs:
+                    st.error(f"Custom BDR schedule has {len(bdr_hire_months)} entries, need {num_bdrs}. Using default cadence.")
+                    bdr_hire_months = None
+            except ValueError:
+                st.error("Couldn't parse custom BDR schedule. Using default cadence.")
 
-    st.sidebar.caption("Execution")
-    execution_efficiency = st.sidebar.slider("Execution efficiency", 0.0, 1.5, 1.0, key=f"{key}_exec")
+        ps_fee_pct = st.slider("Professional services fee (% of ARR)", 0.0, 0.5, 0.0, key=f"{key}_psfee")
 
-    st.sidebar.caption("Contract & Revenue Recognition")
-    contract_term = st.sidebar.number_input("Contract term (months)", 1, 60, 12, key=f"{key}_term")
-    implementation_lag = st.sidebar.number_input("Implementation lag (months)", 0, 24, 2, key=f"{key}_lag")
-    ps_fee_pct = st.sidebar.slider("Professional services fee (% of ARR)", 0.0, 0.5, 0.0, key=f"{key}_psfee")
-
-    st.sidebar.caption("Renewal Assumptions")
-    churn_rate = st.sidebar.slider("Annual gross revenue churn", 0.0, 1.0, 0.12, key=f"{key}_churn")
-    expansion_rate = st.sidebar.slider("Annual expansion rate", 0.0, 1.0, 0.18, key=f"{key}_exp")
-    contraction_rate = st.sidebar.slider("Annual contraction rate", 0.0, 1.0, 0.03, key=f"{key}_contr")
-
-    use_seasonality = st.sidebar.checkbox("Apply seasonal pattern", value=False, key=f"{key}_useseason")
-    seasonality_pattern = None
-    if use_seasonality:
-        months_labels = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
-        seasonality_pattern = [
-            st.sidebar.slider(months_labels[i], 0.0, 2.0, 1.0, key=f"{key}_season_{i}") for i in range(12)
-        ]
+        use_seasonality = st.checkbox("Apply seasonal pattern", value=False, key=f"{key}_useseason")
+        seasonality_pattern = None
+        if use_seasonality:
+            months_labels = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+            season_cols = st.columns(6)
+            seasonality_pattern = [
+                season_cols[i % 6].slider(months_labels[i], 0.0, 2.0, 1.0, key=f"{key}_season_{i}") for i in range(12)
+            ]
 
     return dict(
         pod_name=pod_name, num_aes=num_aes, num_bdrs=num_bdrs, hiring_cadence=hiring_cadence,
         num_existing_aes=num_existing_aes, num_existing_bdrs=num_existing_bdrs,
         ae_hire_months=ae_hire_months, bdr_hire_months=bdr_hire_months,
-        ae_base=ae_base, ae_variable=ae_variable, ae_quota=ae_quota,
-        bdr_base=bdr_base, bdr_variable=bdr_variable, bdr_monthly_sql_quota=bdr_monthly_sql_quota,
-        monthly_leads=monthly_leads, lead_to_mql=lead_to_mql, mql_to_sql=mql_to_sql,
+        ae_base=ae_base, ae_variable=ae_variable, ae_quota=ae_quota_millions * 1_000_000,
+        bdr_base=bdr_base, bdr_variable=bdr_variable, bdr_monthly_sql_quota=bdr_sql,
+        marketing_sqls=marketing_sqls,
         ae_self_sourced=ae_self_sourced, avg_deal_size=avg_deal_size,
         win_marketing=win_marketing, win_bdr=win_bdr, win_self=win_self,
         execution_efficiency=execution_efficiency, contract_term=contract_term,
         implementation_lag=implementation_lag, ps_fee_pct=ps_fee_pct,
         churn_rate=churn_rate, expansion_rate=expansion_rate, contraction_rate=contraction_rate,
-        seasonality_pattern=seasonality_pattern,
+        seasonality_pattern=seasonality_pattern, num_months=num_months,
     )
 
 
@@ -335,7 +342,13 @@ def run_full_model(cfg: dict, num_months: int):
         ae_comp_template=RoleComp(annual_base=cfg["ae_base"], annual_variable_at_100pct=cfg["ae_variable"], annual_quota=cfg["ae_quota"]),
         bdr_comp_template=RoleComp(annual_base=cfg["bdr_base"], annual_variable_at_100pct=cfg["bdr_variable"],
                                     annual_quota=cfg["bdr_monthly_sql_quota"] * 12) if (cfg["num_bdrs"] > 0 or cfg["num_existing_bdrs"] > 0) else None,
-        marketing=MarketingFunnel(monthly_leads=cfg["monthly_leads"], lead_to_mql_rate=cfg["lead_to_mql"], mql_to_sql_rate=cfg["mql_to_sql"]),
+        # Marketing funnel mechanics (lead->MQL->SQL conversion) are deliberately
+        # not modeled — channel mix is too company/product-specific to generalize
+        # honestly (see README). marketing_sqls is a flat pass-through: leads=SQLs,
+        # both conversion rates=100%, so sqls_generated() reduces to marketing_sqls
+        # exactly. Same treatment BDR output already gets (a flat SQL quota, not
+        # a simulated call->connect->meeting funnel) — kept consistent on purpose.
+        marketing=MarketingFunnel(monthly_leads=cfg["marketing_sqls"], lead_to_mql_rate=1.0, mql_to_sql_rate=1.0),
         avg_deal_size=cfg["avg_deal_size"], win_rate_marketing_sourced=cfg["win_marketing"],
         win_rate_bdr_sourced=cfg["win_bdr"], win_rate_ae_self_sourced=cfg["win_self"],
         ae_self_sourced_sqls_per_month=cfg["ae_self_sourced"], execution_efficiency=cfg["execution_efficiency"],
@@ -389,13 +402,15 @@ def make_waterfall(labels, values, title, measure=None):
 # MODE SELECTOR
 # ---------------------------------------------------------------------------
 mode = st.radio("Mode", ["Single Scenario", "Compare Two Scenarios"], horizontal=True)
-num_months = st.slider("Scenario length (months)", 6, 48, 24)
+# Horizon is now set per-scenario inside render_inputs() (part of the
+# horizontal assumptions grid), not a separate shared control here.
 
 # ===========================================================================
 # SINGLE SCENARIO MODE
 # ===========================================================================
 if mode == "Single Scenario":
     cfg = render_inputs("s", "Scenario Inputs")
+    num_months = cfg["num_months"]
 
     # -----------------------------------------------------------------
     # EXISTING CUSTOMER BOOK (optional) — top-line ARR/revenue overlay,
@@ -527,7 +542,16 @@ if mode == "Single Scenario":
                 cfg_list = [cfg]
                 for preset_name in additional:
                     preset_cfg = dict(cfg)  # inherit shared settings (execution_efficiency, seasonality=None, etc.)
-                    mapped = {_PRESET_SUFFIX_TO_CFG_FIELD[k]: v for k, v in _PRESET_DEFAULTS[preset_name].items()}
+                    preset_dict = _PRESET_DEFAULTS[preset_name]
+                    mapped = {_PRESET_SUFFIX_TO_CFG_FIELD[k]: v for k, v in preset_dict.items()
+                              if k in _PRESET_SUFFIX_TO_CFG_FIELD}
+                    mapped["ae_quota"] = preset_dict["ae_quota_m"] * 1_000_000  # millions -> raw $, unit conversion
+                    # Comp isn't in presets anymore — derive the same smart default render_inputs() uses
+                    default_ae_ote = mapped["ae_quota"] / 5.5
+                    mapped.setdefault("ae_base", default_ae_ote / 2)
+                    mapped.setdefault("ae_variable", default_ae_ote / 2)
+                    mapped.setdefault("bdr_base", 55_000)
+                    mapped.setdefault("bdr_variable", 30_000)
                     preset_cfg.update(mapped)
                     preset_cfg["pod_name"] = preset_name
                     preset_cfg["ae_hire_months"] = None
@@ -676,10 +700,21 @@ if mode == "Single Scenario":
 # COMPARE TWO SCENARIOS MODE
 # ===========================================================================
 else:
-    with st.sidebar.expander("Scenario A", expanded=True):
+    with st.expander("Scenario A", expanded=True):
         cfg_a = render_inputs("a", "Scenario A Inputs")
-    with st.sidebar.expander("Scenario B", expanded=True):
+    with st.expander("Scenario B", expanded=True):
         cfg_b = render_inputs("b", "Scenario B Inputs")
+
+    # Both scenarios must share one horizon for the bridge math to mean
+    # anything — bridging "Scenario A ending ARR" against "Scenario B ending
+    # ARR" from two different-length windows would be comparing apples to
+    # oranges. Scenario A's horizon governs; forced explicitly here rather
+    # than just hoping the user sets both fields the same.
+    if cfg_a["num_months"] != cfg_b["num_months"]:
+        st.info(f"Scenario A's horizon ({cfg_a['num_months']} months) governs both scenarios "
+                f"for a valid comparison — Scenario B's horizon setting is ignored.")
+    num_months = cfg_a["num_months"]
+    cfg_b["num_months"] = num_months
 
     try:
         result_a = run_full_model(cfg_a, num_months)

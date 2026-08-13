@@ -58,7 +58,7 @@ def _build_pod_assumptions_column(ws, cfg: dict, col: int, num_months: int) -> d
         num_months, term, lag, None,
         cfg["ae_base"], cfg["ae_variable"], cfg["ae_quota"],
         cfg["bdr_base"], cfg["bdr_variable"], cfg["bdr_monthly_sql_quota"], None,
-        cfg["monthly_leads"], cfg["lead_to_mql"], cfg["mql_to_sql"], cfg["ae_self_sourced"], None,
+        cfg["marketing_sqls"], cfg["ae_self_sourced"], None,
         cfg["avg_deal_size"], cfg["win_marketing"], cfg["win_bdr"], cfg["win_self"],
         cfg["execution_efficiency"], None,
         cfg["churn_rate"], cfg["expansion_rate"], cfg["contraction_rate"],
@@ -67,7 +67,7 @@ def _build_pod_assumptions_column(ws, cfg: dict, col: int, num_months: int) -> d
     ref_rows = {}
     labels_in_order = ["horizon", "term", "lag", None, "ae_base", "ae_variable", "ae_quota",
                         "bdr_base", "bdr_variable", "bdr_sql_quota", None,
-                        "leads", "l2m", "m2s", "self_sourced", None,
+                        "marketing_sqls", "self_sourced", None,
                         "deal_size", "win_mkt", "win_bdr", "win_self", "exec_eff", None,
                         "churn", "expansion", "contraction"]
     for label, value in zip(labels_in_order, values):
@@ -98,7 +98,7 @@ def generate_multi_pod_workbook_bytes(cfg_list: list, num_months: int) -> bytes:
         "Horizon (months)", "Contract term (months)", "Implementation lag (months)", "",
         "AE — annual base ($)", "AE — annual variable @ 100% ($)", "AE — annual quota ($)",
         "BDR — annual base ($)", "BDR — annual variable @ 100% ($)", "BDR — monthly SQL quota", "",
-        "Marketing leads/month", "Lead → MQL rate", "MQL → SQL rate", "AE self-sourced SQLs/month", "",
+        "Marketing SQLs/month", "AE self-sourced SQLs/month", "",
         "Avg deal size — TCV ($)", "Win rate — marketing-sourced", "Win rate — BDR-sourced",
         "Win rate — AE self-sourced", "Execution efficiency", "",
         "Renewal — annual gross churn rate", "Renewal — annual expansion rate", "Renewal — annual contraction rate",
@@ -266,7 +266,7 @@ def _build_capacity_sheet(wb, cfg, ref, num_months, sheet_name):
     ws.cell(row=row, column=1, value="Marketing SQLs").font = BOLD
     for m in range(1, num_months + 1):
         col_letter = get_column_letter(CAP_FIRST_COL + m - 1)
-        c = ws.cell(row=row, column=CAP_FIRST_COL + m - 1, value=f'={ref["leads"]}*{ref["l2m"]}*{ref["m2s"]}')
+        c = ws.cell(row=row, column=CAP_FIRST_COL + m - 1, value=f'={ref["marketing_sqls"]}')
         c.font = BLACK
         c.number_format = NUM_FMT
     row += 2
