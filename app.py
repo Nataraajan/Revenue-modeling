@@ -23,8 +23,9 @@ st.set_page_config(page_title="Revenue Architecture Model", layout="wide")
 # width so short numbers don't sit in a lot of empty box.
 st.markdown("""
 <style>
-    div[data-testid="stNumberInput"] input { max-width: 140px; }
-    div[data-testid="stNumberInput"] { max-width: 180px; }
+    div[data-testid="stNumberInput"] input { max-width: 110px; }
+    div[data-testid="stNumberInput"] { max-width: 150px; }
+    div[data-testid="stSelectbox"] { max-width: 260px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -209,15 +210,25 @@ _PRESET_SUFFIX_TO_CFG_FIELD = {
 }
 
 
-def render_inputs(key: str, label: str, num_months_default: int = 24) -> dict:
+def render_inputs(key: str, label: str, num_months_default: int = 24, show_gross_margin: bool = False) -> dict:
     st.subheader(label)
 
-    top1, top2 = st.columns([2, 1])
+    # Same 8-column grid as the "Team & Quota" row below, so the Segment /
+    # Horizon / Gross margin boxes line up at the same width instead of
+    # stretching across 1/2 or 1/3 of the page.
+    top1, top2, top3, *_ = st.columns(8)
+    if show_gross_margin:
+        gross_margin_pct = top3.number_input("Gross margin % (for LTV)", 0.0, 1.0, 0.75, step=0.01, key=f"{key}_gm",
+                                              help="Blended gross margin on subscription revenue. Used only in the LTV formula: LTV = ARPA × Gross Margin ÷ Annual Churn Rate.")
+    else:
+        gross_margin_pct = None
     pod_preset = top1.selectbox(
         "Segment", ["SMB", "Mid-Market", "Enterprise", "Inbound", "Other (custom)"],
         index=1, key=f"{key}_pod_preset",
+        help="Loads a starting set of assumptions for that segment (team size, deal size, win rates, renewal rates). Every field below is still editable after — this just sets sensible defaults.",
     )
-    num_months = top2.number_input("Horizon (months)", 6, 48, num_months_default, key=f"{key}_num_months")
+    num_months = top2.number_input("Horizon (months)", 6, 48, num_months_default, key=f"{key}_num_months",
+                                    help="How many months forward the model projects, starting from month 1 of new bookings.")
 
     # Detect a preset CHANGE and inject its defaults into session_state
     # *before* the affected widgets are created below — Streamlit widgets
@@ -230,7 +241,8 @@ def render_inputs(key: str, label: str, num_months_default: int = 24) -> dict:
         st.session_state[prev_key] = pod_preset
 
     if pod_preset == "Other (custom)":
-        pod_name = st.text_input("Custom segment name", "MidMarket", key=f"{key}_pod_name_custom")
+        pod_name = st.text_input("Custom segment name", "MidMarket", key=f"{key}_pod_name_custom",
+                                  help="Just a label — doesn't affect any of the math.")
     else:
         pod_name = pod_preset
 
@@ -240,35 +252,50 @@ def render_inputs(key: str, label: str, num_months_default: int = 24) -> dict:
     # detail inputs (comp breakdown, hiring cadence, seasonality) live in
     # the collapsed "Advanced" section below, the same way a real model
     # keeps headcount/comp detail on its own separate sheet. ---
-    st.caption("Team")
-    c1, c2, c3, c4 = st.columns(4)
-    num_existing_aes = c1.number_input("Existing AEs", 0, 100, 0, key=f"{key}_existing_aes")
-    num_aes = c2.number_input("New AE hires", 0, 50, 3, key=f"{key}_num_aes")
-    num_existing_bdrs = c3.number_input("Existing BDRs", 0, 100, 0, key=f"{key}_existing_bdrs")
-    num_bdrs = c4.number_input("New BDR hires", 0, 50, 2, key=f"{key}_num_bdrs")
-
-    st.caption("Quota & Demand")
-    d1, d2, d3, d4 = st.columns(4)
-    ae_quota_millions = d1.number_input("AE annual quota ($M)", 0.0, 10.0, 1.1, step=0.1, key=f"{key}_ae_quota_m")
-    bdr_sql = d2.number_input("BDR SQLs/month", 0, 50, 6, key=f"{key}_bdr_sql")
-    marketing_sqls = d3.number_input("Marketing SQLs/month", 0.0, 500.0, 12.0, key=f"{key}_marketing_sqls")
-    ae_self_sourced = d4.number_input("AE self-sourced SQLs/mo", 0.0, 20.0, 2.0, key=f"{key}_selfsrc")
+    st.caption("Team & Quota")
+    c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(8)
+    num_existing_aes = c1.number_input("Existing AEs", 0, 100, 0, key=f"{key}_existing_aes",
+                                        help="Already on the team — fully productive from month 1, no ramp-up period.")
+    num_aes = c2.number_input("New AEs", 0, 50, 3, key=f"{key}_num_aes",
+                               help="New hires — ramp up over 3 months (33%/66%/100% of full quota-carrying capacity), phased in per the hiring cadence set in Advanced.")
+    num_existing_bdrs = c3.number_input("Existing BDRs", 0, 100, 0, key=f"{key}_existing_bdrs",
+                                         help="Already on the team — fully productive from month 1.")
+    num_bdrs = c4.number_input("New BDRs", 0, 50, 2, key=f"{key}_num_bdrs",
+                                help="New hires — same 3-month ramp as new AEs.")
+    ae_quota_millions = c5.number_input("AE quota ($M)", 0.0, 10.0, 1.1, step=0.1, key=f"{key}_ae_quota_m",
+                                         help="Annual $ bookings quota per fully-ramped AE. Sets the hard capacity ceiling on how much this team can close, and drives the default comp split in Advanced (5.5x quota:OTE).")
+    bdr_sql = c6.number_input("BDR SQLs/mo", 0, 50, 6, key=f"{key}_bdr_sql",
+                               help="SQLs (sales-qualified leads) each fully-ramped BDR produces per month, feeding the AE pipeline.")
+    marketing_sqls = c7.number_input("Mktg SQLs/mo", 0.0, 500.0, 12.0, key=f"{key}_marketing_sqls",
+                                      help="Marketing/inbound-sourced SQLs per month — a flat number, not a lead→MQL→SQL funnel. Channel mix (content, paid, partnerships) is too company-specific to model generically; see README.")
+    ae_self_sourced = c8.number_input("AE self-src/mo", 0.0, 20.0, 2.0, key=f"{key}_selfsrc",
+                                       help="SQLs each AE generates on their own (existing network, outbound), on top of what BDRs and marketing feed them.")
 
     st.caption("Deal Economics & Win Rates")
     e1, e2, e3, e4 = st.columns(4)
-    avg_deal_size = e1.number_input("Avg deal size — TCV ($)", 0, 5_000_000, 18_000, step=1000, key=f"{key}_deal")
-    win_marketing = e2.slider("Win rate — marketing", 0.0, 1.0, 0.25, key=f"{key}_wm")
-    win_bdr = e3.slider("Win rate — BDR", 0.0, 1.0, 0.20, key=f"{key}_wb")
-    win_self = e4.slider("Win rate — self-sourced", 0.0, 1.0, 0.35, key=f"{key}_ws")
+    avg_deal_size = e1.number_input("Avg deal size — TCV ($)", 0, 5_000_000, 18_000, step=1000, key=f"{key}_deal",
+                                     help="Average Total Contract Value per deal — the full value over the entire contract term, not annualized. Used to convert monthly bookings $ into individual synthetic contracts.")
+    win_marketing = e2.slider("Win rate — marketing", 0.0, 1.0, 0.25, key=f"{key}_wm",
+                               help="% of marketing-sourced SQLs that close as won deals.")
+    win_bdr = e3.slider("Win rate — BDR", 0.0, 1.0, 0.20, key=f"{key}_wb",
+                         help="% of BDR-sourced SQLs that close as won deals. Typically lower than marketing/self-sourced — colder outbound leads.")
+    win_self = e4.slider("Win rate — self-sourced", 0.0, 1.0, 0.35, key=f"{key}_ws",
+                          help="% of AE-self-sourced SQLs that close as won deals. Typically the highest — warmest, highest-intent source.")
 
     st.caption("Contract & Renewal")
     f1, f2, f3, f4, f5, f6 = st.columns(6)
-    contract_term = f1.number_input("Term (mo)", 1, 60, 12, key=f"{key}_term")
-    implementation_lag = f2.number_input("Impl. lag (mo)", 0, 24, 2, key=f"{key}_lag")
-    churn_rate = f3.slider("Churn %", 0.0, 1.0, 0.12, key=f"{key}_churn")
-    expansion_rate = f4.slider("Expansion %", 0.0, 1.0, 0.18, key=f"{key}_exp")
-    contraction_rate = f5.slider("Contraction %", 0.0, 1.0, 0.03, key=f"{key}_contr")
-    execution_efficiency = f6.slider("Exec. efficiency", 0.0, 1.5, 1.0, key=f"{key}_exec")
+    contract_term = f1.number_input("Term (mo)", 1, 60, 12, key=f"{key}_term",
+                                     help="Subscription contract length. Revenue is recognized ratably (evenly) over this period, starting at go-live.")
+    implementation_lag = f2.number_input("Impl. lag (mo)", 0, 24, 2, key=f"{key}_lag",
+                                          help="Months between signing and go-live. Revenue recognition can't start until go-live, even though the deal is already booked — this is the gap that breaks naive 'bookings = revenue' models.")
+    churn_rate = f3.number_input("Churn %", 0.0, 1.0, 0.12, step=0.01, key=f"{key}_churn",
+                                  help="Annual gross revenue churn rate — % of ARR lost at renewal from customers who don't renew at all.")
+    expansion_rate = f4.number_input("Expansion %", 0.0, 1.0, 0.18, step=0.01, key=f"{key}_exp",
+                                      help="Annual expansion rate — % ARR gained from upsell/cross-sell among renewing accounts (applied after churn, to the retained base).")
+    contraction_rate = f5.number_input("Contraction %", 0.0, 1.0, 0.03, step=0.01, key=f"{key}_contr",
+                                        help="Annual contraction rate — % ARR lost from downgrades among renewing accounts (distinct from full churn — the account stays, just pays less).")
+    execution_efficiency = f6.number_input("Exec. efficiency", 0.0, 1.5, 1.0, step=0.01, key=f"{key}_exec",
+                                            help="Real-world execution quality, independent of funnel/capacity math — deal slippage, discounting, a rep having a bad quarter. 1.0 = perfect execution. Still capped by capacity even above 1.0.")
 
     # --- Advanced: comp breakdown, hiring cadence, custom schedules,
     # seasonality, PS fee. Collapsed by default — a smart comp default is
@@ -277,21 +304,26 @@ def render_inputs(key: str, label: str, num_months_default: int = 24) -> dict:
         st.caption("AE comp defaults to a 5.5x quota:OTE split (mid of the healthy 4-6x band) unless overridden.")
         default_ae_ote = (ae_quota_millions * 1_000_000) / 5.5
         ac1, ac2 = st.columns(2)
-        ae_base = ac1.number_input("AE annual base ($)", 0, 500_000, int(default_ae_ote / 2), step=5000, key=f"{key}_ae_base")
-        ae_variable = ac2.number_input("AE annual variable @ 100% ($)", 0, 500_000, int(default_ae_ote / 2), step=5000, key=f"{key}_ae_var")
+        ae_base = ac1.number_input("AE annual base ($)", 0, 500_000, int(default_ae_ote / 2), step=5000, key=f"{key}_ae_base",
+                                    help="AE annual base salary. Paid every month regardless of ramp or attainment.")
+        ae_variable = ac2.number_input("AE annual variable @ 100% ($)", 0, 500_000, int(default_ae_ote / 2), step=5000, key=f"{key}_ae_var",
+                                        help="AE commission/bonus at 100% quota attainment. Paid proportionally to actual attainment, scaled by ramp.")
 
         bc1, bc2 = st.columns(2)
-        bdr_base = bc1.number_input("BDR annual base ($)", 0, 300_000, 55_000, step=5000, key=f"{key}_bdr_base")
-        bdr_variable = bc2.number_input("BDR annual variable @ 100% ($)", 0, 300_000, 30_000, step=5000, key=f"{key}_bdr_var")
+        bdr_base = bc1.number_input("BDR annual base ($)", 0, 300_000, 55_000, step=5000, key=f"{key}_bdr_base",
+                                     help="BDR annual base salary.")
+        bdr_variable = bc2.number_input("BDR annual variable @ 100% ($)", 0, 300_000, 30_000, step=5000, key=f"{key}_bdr_var",
+                                         help="BDR commission/bonus at 100% SQL quota attainment.")
 
-        hiring_cadence = st.number_input("Default hiring cadence (months between hires)", 1, 12, 3, key=f"{key}_cadence")
+        hiring_cadence = st.number_input("Default hiring cadence (months between hires)", 1, 12, 3, key=f"{key}_cadence",
+                                          help="New hires are staggered this many months apart by default (e.g. 3 = one new hire every 3 months). Overridden by a custom schedule below if you set one.")
         custom_ae_schedule_raw = st.text_input(
             "Custom AE hire-month schedule (optional, comma-separated)", "", key=f"{key}_ae_custom_sched",
-            help=f"e.g. '0,0,6,6'. Must have exactly {num_aes} entries if used.",
+            help=f"e.g. '0,0,6,6' to hire 2 now and 2 more in month 6. Must have exactly {num_aes} entries if used. Leave blank to use the cadence above.",
         )
         custom_bdr_schedule_raw = st.text_input(
             "Custom BDR hire-month schedule (optional, comma-separated)", "", key=f"{key}_bdr_custom_sched",
-            help=f"Same format. Must have exactly {num_bdrs} entries if used.",
+            help=f"Same format. Must have exactly {num_bdrs} entries if used. Leave blank to use the cadence above.",
         )
         ae_hire_months = None
         if custom_ae_schedule_raw.strip():
@@ -313,15 +345,19 @@ def render_inputs(key: str, label: str, num_months_default: int = 24) -> dict:
             except ValueError:
                 st.error("Couldn't parse custom BDR schedule. Using default cadence.")
 
-        ps_fee_pct = st.slider("Professional services fee (% of ARR)", 0.0, 0.5, 0.0, key=f"{key}_psfee")
+        ps_fee_pct = st.slider("Professional services fee (% of ARR)", 0.0, 0.5, 0.0, key=f"{key}_psfee",
+                                help="One-time implementation fee, as a % of the account's ARR. Billed upfront at signing, but recognized as revenue only at go-live (point-in-time, distinct performance obligation under ASC 606).")
 
-        use_seasonality = st.checkbox("Apply seasonal pattern", value=False, key=f"{key}_useseason")
+        use_seasonality = st.checkbox("Apply seasonal pattern", value=False, key=f"{key}_useseason",
+                                       help="Apply a repeating 12-month multiplier pattern to realized bookings (e.g. December slowdown, Q4 push). Still capped by the hard capacity ceiling.")
         seasonality_pattern = None
         if use_seasonality:
             months_labels = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
             season_cols = st.columns(6)
             seasonality_pattern = [
-                season_cols[i % 6].slider(months_labels[i], 0.0, 2.0, 1.0, key=f"{key}_season_{i}") for i in range(12)
+                season_cols[i % 6].slider(months_labels[i], 0.0, 2.0, 1.0, key=f"{key}_season_{i}",
+                                           help=f"Bookings multiplier for {months_labels[i]}. 1.0 = normal, 0.5 = half, 1.5 = 50% above normal.")
+                for i in range(12)
             ]
 
     return dict(
@@ -336,7 +372,7 @@ def render_inputs(key: str, label: str, num_months_default: int = 24) -> dict:
         execution_efficiency=execution_efficiency, contract_term=contract_term,
         implementation_lag=implementation_lag, ps_fee_pct=ps_fee_pct,
         churn_rate=churn_rate, expansion_rate=expansion_rate, contraction_rate=contraction_rate,
-        seasonality_pattern=seasonality_pattern, num_months=num_months,
+        seasonality_pattern=seasonality_pattern, num_months=num_months, gross_margin_pct=gross_margin_pct,
     )
 
 
@@ -419,8 +455,9 @@ mode = st.radio("Mode", ["Single Scenario", "Compare Two Scenarios"], horizontal
 # SINGLE SCENARIO MODE
 # ===========================================================================
 if mode == "Single Scenario":
-    cfg = render_inputs("s", "Scenario Inputs")
+    cfg = render_inputs("s", "Scenario Inputs", show_gross_margin=True)
     num_months = cfg["num_months"]
+    gross_margin_pct = cfg["gross_margin_pct"]
 
     # -----------------------------------------------------------------
     # EXISTING CUSTOMER BOOK (optional) — top-line ARR/revenue overlay,
@@ -433,15 +470,13 @@ if mode == "Single Scenario":
     derived_metrics = None
     historical_annual = None
 
-    ceb1, ceb2 = st.columns([3, 1])
-    with ceb1:
-        include_existing = st.checkbox("Include existing customer book (optional)", value=False)
-    with ceb2:
-        gross_margin_pct = st.slider("Gross margin % (for LTV)", 0.0, 1.0, 0.75)
+    include_existing = st.checkbox("Include existing customer book (optional)", value=False,
+                                    help="Layer a top-line ARR/revenue overlay for your pre-existing customer base (derived from a real revenue extract) on top of the new-business model above. Runs alongside, not through, the Contract engine.")
 
     if include_existing:
         with st.expander("Existing Customer Book", expanded=True):
-            uploaded = st.file_uploader("Upload customer revenue extract (CSV or Excel)", type=["csv", "xlsx"])
+            uploaded = st.file_uploader("Upload customer revenue extract (CSV or Excel)", type=["csv", "xlsx"],
+                                         help="Long format: one row per customer per month. Used to derive real trailing-12-month NRR/churn directly from your data, instead of guessing a rate.")
             st.caption("Long format expected: one row per customer per month (customer, month, revenue). "
                        "At least 13 months of history needed to derive a trailing-12-month comparison.")
 
@@ -456,10 +491,14 @@ if mode == "Single Scenario":
                     st.caption("Map your columns:")
                     cols = list(raw_df.columns)
                     mc1, mc2, mc3, mc4 = st.columns(4)
-                    customer_col = mc1.selectbox("Customer column", cols, index=0)
-                    month_col = mc2.selectbox("Month column", cols, index=min(1, len(cols) - 1))
-                    revenue_col = mc3.selectbox("Revenue column", cols, index=min(2, len(cols) - 1))
-                    lookback = mc4.number_input("Lookback (months)", 1, 24, 12)
+                    customer_col = mc1.selectbox("Customer column", cols, index=0,
+                                                  help="Which column identifies each customer (name or ID).")
+                    month_col = mc2.selectbox("Month column", cols, index=min(1, len(cols) - 1),
+                                               help="Which column has the month/date for each revenue row.")
+                    revenue_col = mc3.selectbox("Revenue column", cols, index=min(2, len(cols) - 1),
+                                                 help="Which column has the recognized revenue amount for that customer-month.")
+                    lookback = mc4.number_input("Lookback (months)", 1, 24, 12,
+                                                 help="How far back to compare for the churn/expansion/NRR calculation — 12 months is the standard trailing-twelve-month convention.")
 
                     try:
                         matrix = load_customer_revenue_extract(raw_df, customer_col, month_col, revenue_col)
@@ -475,7 +514,8 @@ if mode == "Single Scenario":
                         )
                         historical_annual = derive_annual_history(matrix)
 
-                        override = st.checkbox("Override derived rates manually", value=False)
+                        override = st.checkbox("Override derived rates manually", value=False,
+                                                help="The derived rates above come straight from your data — this lets you adjust them (e.g. if you know a one-off event skewed the numbers).")
                         if override:
                             oc1, oc2, oc3 = st.columns(3)
                             eb_churn = oc1.slider("Existing book — annual churn", 0.0, 1.0, derived_metrics.implied_annual_churn_rate or 0.10)
@@ -611,13 +651,13 @@ if mode == "Single Scenario":
                 arr_fig.add_trace(go.Bar(x=forecast_rows["period"], y=forecast_rows["ending_arr"],
                                           name="Forecast", marker_color="#aec7e8"))
             arr_fig.update_layout(showlegend=True, height=320, margin=dict(t=20, b=20))
-            st.plotly_chart(arr_fig, use_container_width=True)
+            st.plotly_chart(arr_fig, width='stretch')
 
         st.caption(f"ARR Bridge — {latest['period']}")
         wf_labels = ["Beginning<br>ARR", "New<br>Business", "Expansion", "Contraction", "Churn", "Other /<br>Boundary", "Ending<br>ARR"]
         wf_values = [latest["beginning_arr"], latest["new_arr_booked"], latest["expansion_arr"],
                      -latest["contraction_arr"], -latest["churned_arr"], latest["other_boundary_effect"], latest["ending_arr"]]
-        st.plotly_chart(make_waterfall(wf_labels, wf_values, ""), use_container_width=True)
+        st.plotly_chart(make_waterfall(wf_labels, wf_values, ""), width='stretch')
 
         with st.expander("View underlying data"):
             st.caption(
@@ -628,7 +668,7 @@ if mode == "Single Scenario":
                 "has no NRR/churn (no prior-year baseline to compare against)."
             )
             st.markdown("**Annual (Actual + Forecast)**")
-            st.dataframe(style_wide(combined_annual.set_index("period").T), use_container_width=True)
+            st.dataframe(style_wide(combined_annual.set_index("period").T), width='stretch')
 
 
             st.markdown("**Quarterly**")
@@ -641,7 +681,7 @@ if mode == "Single Scenario":
                 year_quarters = quarterly[quarterly["period"].str.startswith(f"Y{y+1}-")]
                 if len(year_quarters) > 0:
                     st.markdown(f"*Year {y+1}*")
-                    st.dataframe(style_wide(year_quarters.set_index("period").T), use_container_width=True)
+                    st.dataframe(style_wide(year_quarters.set_index("period").T), width='stretch')
 
     if existing_book_df is not None:
         with tabs[1]:
@@ -670,7 +710,7 @@ if mode == "Single Scenario":
                     "(smooth monthly runoff, no individual contract dates). New business runs through the "
                     "full Bowtie engine (Phase 1-3) with real deferred revenue mechanics."
                 )
-                st.dataframe(style_wide(wide(combined)), use_container_width=True)
+                st.dataframe(style_wide(wide(combined)), width='stretch')
 
     with tabs[0 + tab_offset]:
         st.subheader("Bookings: Capacity vs. Demand Constraint")
@@ -682,7 +722,7 @@ if mode == "Single Scenario":
         st.line_chart(phase1_df.set_index("month")[["capacity_constrained_bookings", "demand_constrained_bookings", "actual_bookings"]])
 
         with st.expander("View underlying data"):
-            st.dataframe(style_wide(wide(phase1_df)), use_container_width=True)
+            st.dataframe(style_wide(wide(phase1_df)), width='stretch')
 
     with tabs[1 + tab_offset]:
         st.subheader("Live ARR Trajectory")
@@ -695,7 +735,7 @@ if mode == "Single Scenario":
         st.bar_chart(phase2_df.set_index("month")[["subscription_revenue_recognized", "ps_fee_revenue_recognized"]])
 
         with st.expander("View underlying data"):
-            st.dataframe(style_wide(wide(phase2_df)), use_container_width=True)
+            st.dataframe(style_wide(wide(phase2_df)), width='stretch')
 
     with tabs[2 + tab_offset]:
         st.subheader("Renewal Cohort Summary")
@@ -707,7 +747,7 @@ if mode == "Single Scenario":
             col3.metric("Total Expansion ARR", f"${summary['total_expansion_arr']:,.0f}")
             st.info(summary["nrr_benchmark_check"])
             with st.expander("View underlying data"):
-                st.dataframe(style_wide(wide(renewals_df)), use_container_width=True)
+                st.dataframe(style_wide(wide(renewals_df)), width='stretch')
         else:
             st.info("No renewal events occurred — scenario length may be shorter than the contract term.")
 
@@ -781,7 +821,7 @@ else:
             [start_arr, d_new, d_exp, d_contr, d_churn, other, end_arr],
             "ARR Bridge",
         )
-        st.plotly_chart(fig_arr, use_container_width=True)
+        st.plotly_chart(fig_arr, width='stretch')
 
         st.divider()
         st.subheader("Revenue Bridge: Scenario A → Scenario B")
@@ -804,13 +844,13 @@ else:
             [start_rev, d_sub_new, d_sub_renewal, d_ps, end_rev],
             "Revenue Bridge",
         )
-        st.plotly_chart(fig_rev, use_container_width=True)
+        st.plotly_chart(fig_rev, width='stretch')
 
     with tab3:
         st.caption("Tables shown with months as columns, metrics as rows.")
         st.subheader("Scenario A — Phase 2 Output")
-        st.dataframe(style_wide(wide(p2a)), use_container_width=True)
+        st.dataframe(style_wide(wide(p2a)), width='stretch')
         st.subheader("Scenario B — Phase 2 Output")
-        st.dataframe(style_wide(wide(p2b)), use_container_width=True)
+        st.dataframe(style_wide(wide(p2b)), width='stretch')
 
 st.caption("Built on the Bowtie Model (Winning by Design). All math is deterministic — no randomized variables anywhere in this model.")
