@@ -42,7 +42,9 @@ st.caption("Model how GTM capacity, pipeline, implementation timing and customer
 def wide(df: pd.DataFrame) -> pd.DataFrame:
     if len(df) == 0 or "month" not in df.columns:
         return df
-    return df.set_index("month").T
+    transposed = df.set_index("month").T
+    transposed.columns = [f"M{c}" for c in transposed.columns]
+    return transposed
 
 
 # ---------------------------------------------------------------------------
@@ -103,9 +105,9 @@ _LABELS = {
     "month": "Month", "period": "Period",
     "active_aes": "Active AEs", "active_bdrs": "Active BDRs",
     "sqls_marketing": "SQLs — Marketing", "sqls_bdr": "SQLs — BDR", "sqls_ae_self_sourced": "SQLs — AE Self-Sourced",
-    "capacity_constrained_bookings": "Capacity-Constrained Bookings", "demand_constrained_bookings": "Demand-Constrained Bookings",
-    "theoretical_bookings": "Theoretical Bookings", "execution_efficiency": "Execution Efficiency",
-    "seasonal_multiplier": "Seasonal Multiplier", "actual_bookings": "Actual Bookings",
+    "capacity_constrained_bookings": "Capacity-Constrained Bookings (TCV)", "demand_constrained_bookings": "Demand-Constrained Bookings (TCV)",
+    "theoretical_bookings": "Theoretical Bookings (TCV)", "execution_efficiency": "Execution Efficiency",
+    "seasonal_multiplier": "Seasonal Multiplier", "actual_bookings": "Actual Bookings (TCV)",
     "overall_attainment_pct": "Attainment", "binding_constraint": "Binding Constraint",
     "pipeline_coverage_ratio": "Pipeline Coverage", "coverage_target": "Coverage Target",
     "ae_cost": "AE Cost", "bdr_cost": "BDR Cost", "total_cost_of_capacity": "Total Cost of Capacity",
@@ -206,38 +208,37 @@ _PRESET_DEFAULTS = {
 # consistent with keeping comp detail out of the headline assumptions.
 
 
-_PRESET_SUFFIX_TO_CFG_FIELD = {
-    "existing_aes": "num_existing_aes", "existing_bdrs": "num_existing_bdrs",
-    "num_aes": "num_aes", "num_bdrs": "num_bdrs", "cadence": "hiring_cadence",
-    "bdr_sql": "bdr_monthly_sql_quota",
-    "marketing_sqls": "marketing_sqls", "selfsrc": "ae_self_sourced",
-    "deal": "avg_deal_size", "wm": "win_marketing", "wb": "win_bdr", "ws": "win_self",
-    "term": "contract_term", "lag": "implementation_lag", "psfee": "ps_fee_pct",
-    "churn": "churn_rate", "exp": "expansion_rate", "contr": "contraction_rate",
-    # ae_quota_m handled specially (unit conversion, millions -> raw $) wherever
-    # this mapping is used for cfg construction — see download section below.
-}
-
-
-def render_inputs(key: str, label: str, num_months_default: int = 24, show_gross_margin: bool = False) -> dict:
+def render_inputs(key: str, label: str, num_months_default: int = 24, show_gross_margin: bool = False,
+                   fixed_segment: str = None, show_horizon: bool = True) -> dict:
     st.subheader(label)
 
-    # Same 8-column grid as the "Team & Quota" row below, so the Segment /
-    # Horizon / Gross margin boxes line up at the same width instead of
-    # stretching across 1/2 or 1/3 of the page.
-    top1, top2, top3, *_ = st.columns(8)
-    if show_gross_margin:
-        gross_margin_pct = top3.number_input("Gross margin %", 0.0, 1.0, 0.75, step=0.01, key=f"{key}_gm",
-                                              help="Used for LTV. Blended gross margin on subscription revenue. Used only in the LTV formula: LTV = ARPA × Gross Margin ÷ Annual Churn Rate.")
-    else:
+    if fixed_segment is not None:
+        # Full Company mode: segment is fixed to this box (no dropdown), and
+        # horizon/gross margin are shared top-level controls collected once,
+        # outside this function — so this box skips that whole top row.
+        pod_preset = fixed_segment
         gross_margin_pct = None
-    pod_preset = top1.selectbox(
-        "Segment", ["SMB", "Mid-Market", "Enterprise", "Inbound", "Other (custom)"],
-        index=1, key=f"{key}_pod_preset",
-        help="Loads a starting set of assumptions for that segment (team size, deal size, win rates, renewal rates). Every field below is still editable after — this just sets sensible defaults.",
-    )
-    num_months = top2.number_input("Horizon (months)", 6, 48, num_months_default, key=f"{key}_num_months",
-                                    help="How many months forward the model projects, starting from month 1 of new bookings.")
+        num_months = num_months_default
+    else:
+        # Same 8-column grid as the "Team & Quota" row below, so the Segment /
+        # Horizon / Gross margin boxes line up at the same width instead of
+        # stretching across 1/2 or 1/3 of the page.
+        top1, top2, top3, *_ = st.columns(8)
+        if show_gross_margin:
+            gross_margin_pct = top3.number_input("Gross margin %", 0.0, 1.0, 0.75, step=0.01, key=f"{key}_gm",
+                                                  help="Used for LTV. Blended gross margin on subscription revenue. Used only in the LTV formula: LTV = ARPA × Gross Margin ÷ Annual Churn Rate.")
+        else:
+            gross_margin_pct = None
+        pod_preset = top1.selectbox(
+            "Segment", ["SMB", "Mid-Market", "Enterprise", "Inbound", "Other (custom)"],
+            index=1, key=f"{key}_pod_preset",
+            help="Loads a starting set of assumptions for that segment (team size, deal size, win rates, renewal rates). Every field below is still editable after — this just sets sensible defaults.",
+        )
+        if show_horizon:
+            num_months = top2.number_input("Horizon (months)", 6, 48, num_months_default, key=f"{key}_num_months",
+                                            help="How many months forward the model projects, starting from month 1 of new bookings.")
+        else:
+            num_months = num_months_default
 
     # Detect a preset CHANGE and inject its defaults into session_state
     # *before* the affected widgets are created below — Streamlit widgets
@@ -272,12 +273,12 @@ def render_inputs(key: str, label: str, num_months_default: int = 24, show_gross
     num_bdrs = c4.number_input("New BDRs", 0, 50, 2, key=f"{key}_num_bdrs",
                                 help="New hires — same 3-month ramp as new AEs.")
     ae_quota_millions = c5.number_input("AE quota ($M)", 0.0, 10.0, 1.1, step=0.1, key=f"{key}_ae_quota_m",
-                                         help="Annual $ bookings quota per fully-ramped AE. Sets the hard capacity ceiling on how much this team can close, and drives the default comp split in Advanced (5.5x quota:OTE).")
+                                         help="Annual bookings quota per fully-ramped AE, in TCV (Total Contract Value) — the same unit as Avg Deal Size, not ARR. Only equals an ARR quota when the contract term is 12 months. Sets the hard capacity ceiling on how much this team can close, and drives the default comp split in Advanced (5.5x quota:OTE).")
     bdr_sql = c6.number_input("BDR SQLs/mo", 0, 50, 6, key=f"{key}_bdr_sql",
                                help="SQLs (sales-qualified leads) each fully-ramped BDR produces per month, feeding the AE pipeline.")
     marketing_sqls = c7.number_input("Mktg SQLs/mo", 0.0, 500.0, 12.0, key=f"{key}_marketing_sqls",
                                       help="Marketing/inbound-sourced SQLs per month — a flat number, not a lead→MQL→SQL funnel. Channel mix (content, paid, partnerships) is too company-specific to model generically; see README.")
-    ae_self_sourced = c8.number_input("AE self-src/mo", 0.0, 20.0, 2.0, key=f"{key}_selfsrc",
+    ae_self_sourced = c8.number_input("AE self-src/mo", 0.0, 20.0, 2.0, step=1.0, key=f"{key}_selfsrc",
                                        help="SQLs each AE generates on their own (existing network, outbound), on top of what BDRs and marketing feed them.")
 
     st.caption("Deal Economics & Win Rates")
@@ -390,8 +391,8 @@ def render_inputs(key: str, label: str, num_months_default: int = 24, show_gross
 # display AND for cross-scenario bridging (all_contracts is needed for the
 # origin-split revenue bridge).
 # ---------------------------------------------------------------------------
-def run_full_model(cfg: dict, num_months: int):
-    pod = PodConfig(
+def build_pod(cfg: dict) -> PodConfig:
+    return PodConfig(
         pod_name=cfg["pod_name"], num_aes=int(cfg["num_aes"]), num_bdrs=int(cfg["num_bdrs"]),
         num_existing_aes=int(cfg["num_existing_aes"]), num_existing_bdrs=int(cfg["num_existing_bdrs"]),
         ae_comp_template=RoleComp(annual_base=cfg["ae_base"], annual_variable_at_100pct=cfg["ae_variable"], annual_quota=cfg["ae_quota"]),
@@ -412,6 +413,32 @@ def run_full_model(cfg: dict, num_months: int):
         seasonality_pattern=cfg["seasonality_pattern"],
         ae_hire_months=cfg.get("ae_hire_months"), bdr_hire_months=cfg.get("bdr_hire_months"),
     )
+
+
+def attainment_summary(cfg: dict, num_months: int) -> dict:
+    """Cheap Phase-1-only preview (no Phase 2/3) — used to show AE quota
+    attainment right under a market's assumptions, before running the full
+    model. Attainment is actual_bookings/capacity_constrained_bookings, which
+    is mathematically capped at 100% (capacity is a hard ceiling) — so it
+    can never itself "exceed 100%". The actionable signal for "is this
+    assumption realistic" is how FAR BELOW 100% it sits, plus how many
+    months are capacity- vs. demand-bound: low attainment + mostly
+    demand-bound months means AEs have slack, so more pipeline (e.g. one
+    more BDR) can close a lot more without hitting the capacity ceiling.
+    """
+    pod = build_pod(cfg)
+    phase1_df = run_scenario(pod.build_scenario(num_months))
+    if len(phase1_df) == 0:
+        return {"avg_attainment_pct": None, "months_capacity_bound": 0, "total_months": 0}
+    return {
+        "avg_attainment_pct": round(phase1_df["overall_attainment_pct"].mean(), 1),
+        "months_capacity_bound": int((phase1_df["binding_constraint"] == "CAPACITY").sum()),
+        "total_months": len(phase1_df),
+    }
+
+
+def run_full_model(cfg: dict, num_months: int):
+    pod = build_pod(cfg)
     phase1_df = run_scenario(pod.build_scenario(num_months))
     initial_contracts = bookings_to_contracts(pod, phase1_df, billing_frequency=BillingFrequency.ANNUAL_UPFRONT)
     assumptions = {cfg["pod_name"]: RenewalAssumptions(
@@ -454,19 +481,127 @@ def make_waterfall(labels, values, title, measure=None):
 
 
 # ---------------------------------------------------------------------------
+# MULTI-MARKET COMBINING — sums genuinely additive columns across markets'
+# Phase 1 / Phase 2 output, then RE-DERIVES ratio/categorical fields
+# (binding_constraint, attainment, ARPA, cost-per-dollar) from the summed
+# components using the same formulas the engines use — a blind sum of a
+# ratio or a string field would be wrong. Fields that are set per-pod and
+# have no meaningful combined value (execution_efficiency, seasonal
+# multiplier, coverage) are dropped from the combined view rather than
+# faked; they're still visible in each market's own per-market breakdown.
+# ---------------------------------------------------------------------------
+def combine_phase1_dfs(phase1_dfs: list) -> pd.DataFrame:
+    if len(phase1_dfs) == 1:
+        return phase1_dfs[0].copy()
+    additive_cols = ["active_aes", "active_bdrs", "sqls_marketing", "sqls_bdr", "sqls_ae_self_sourced",
+                      "capacity_constrained_bookings", "demand_constrained_bookings", "actual_bookings",
+                      "ae_cost", "bdr_cost", "total_cost_of_capacity"]
+    combined = phase1_dfs[0][["month"]].copy()
+    for col in additive_cols:
+        combined[col] = sum(df[col].values for df in phase1_dfs)
+
+    combined["theoretical_bookings"] = combined[["capacity_constrained_bookings", "demand_constrained_bookings"]].min(axis=1)
+
+    def _binding(row):
+        if row["capacity_constrained_bookings"] < row["demand_constrained_bookings"]:
+            return "CAPACITY"
+        elif row["demand_constrained_bookings"] < row["capacity_constrained_bookings"]:
+            return "DEMAND"
+        return "BALANCED"
+    combined["binding_constraint"] = combined.apply(_binding, axis=1)
+
+    combined["overall_attainment_pct"] = combined.apply(
+        lambda r: round(100 * r["actual_bookings"] / r["capacity_constrained_bookings"], 1)
+        if r["capacity_constrained_bookings"] > 0 else 0.0, axis=1,
+    )
+    combined["cost_per_dollar_booked"] = combined.apply(
+        lambda r: round(r["total_cost_of_capacity"] / r["actual_bookings"], 3)
+        if r["actual_bookings"] > 0 else None, axis=1,
+    )
+    return combined
+
+
+def combine_phase2_dfs(phase2_dfs: list) -> pd.DataFrame:
+    if len(phase2_dfs) == 1:
+        return phase2_dfs[0].copy()
+    additive_cols = ["new_bookings_tcv", "new_accounts_signed", "new_arr_booked", "cumulative_accounts_signed",
+                      "cumulative_arr_booked", "live_accounts", "live_arr", "subscription_billings",
+                      "subscription_revenue_recognized", "ps_fee_billings", "ps_fee_revenue_recognized",
+                      "total_billings", "total_revenue_recognized", "cumulative_billings",
+                      "cumulative_revenue_recognized", "deferred_revenue_balance",
+                      "implementation_backlog_value", "implementation_backlog_count"]
+    combined = phase2_dfs[0][["month"]].copy()
+    for col in additive_cols:
+        combined[col] = sum(df[col].values for df in phase2_dfs)
+
+    combined["arpa_new_accounts"] = combined.apply(
+        lambda r: round(r["new_arr_booked"] / r["new_accounts_signed"], 2) if r["new_accounts_signed"] else None, axis=1)
+    combined["blended_arpa_booked"] = combined.apply(
+        lambda r: round(r["cumulative_arr_booked"] / r["cumulative_accounts_signed"], 2) if r["cumulative_accounts_signed"] else None, axis=1)
+    combined["blended_arpa_live"] = combined.apply(
+        lambda r: round(r["live_arr"] / r["live_accounts"], 2) if r["live_accounts"] else None, axis=1)
+    return combined
+
+
+def combine_renewals_for_display(renewals_df: pd.DataFrame) -> pd.DataFrame:
+    """renewals_df (from concatenating multiple markets) can have several rows
+    per month — one per pod whose cohort ended that month. That's correct
+    for summarize_renewals() (an accurate per-event count) and for
+    aggregate_periods() (which groups by month internally either way), but
+    wide()'s month-indexed transpose needs exactly one row per month or it
+    produces duplicate column labels, which breaks Arrow serialization.
+    Sums the $ /count columns per month and re-derives the 2 rate fields
+    from the summed components, dropping pod_name (mixed across pods here).
+    """
+    if len(renewals_df) == 0:
+        return renewals_df
+    sum_cols = ["logos_up_for_renewal", "arr_up_for_renewal", "churned_arr", "expansion_arr",
+                "contraction_arr", "renewed_arr", "logos_retained_expected"]
+    combined = renewals_df.groupby("month", as_index=False)[sum_cols].sum()
+    combined["churn_rate_applied_pct"] = combined.apply(
+        lambda r: round(100 * r["churned_arr"] / r["arr_up_for_renewal"], 2) if r["arr_up_for_renewal"] else None, axis=1)
+    combined["nrr_this_cohort_pct"] = combined.apply(
+        lambda r: round(100 * r["renewed_arr"] / r["arr_up_for_renewal"], 1) if r["arr_up_for_renewal"] else None, axis=1)
+    return combined.sort_values("month").reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
 # MODE SELECTOR
 # ---------------------------------------------------------------------------
-mode = st.radio("Mode", ["Single Scenario", "Compare Two Scenarios"], horizontal=True)
-# Horizon is now set per-scenario inside render_inputs() (part of the
-# horizontal assumptions grid), not a separate shared control here.
+mode = st.radio("Mode", ["Full Company (All Segments)", "Compare Two Scenarios"], horizontal=True)
 
 # ===========================================================================
-# SINGLE SCENARIO MODE
+# FULL COMPANY MODE — all 4 standard segments configured and run together
+# (previously one segment at a time behind a dropdown). Horizon and gross
+# margin are shared, top-level controls here rather than duplicated per box,
+# since all 4 markets need to run over the same window for a coherent
+# consolidated total.
 # ===========================================================================
-if mode == "Single Scenario":
-    cfg = render_inputs("s", "Scenario Inputs", show_gross_margin=True)
-    num_months = cfg["num_months"]
-    gross_margin_pct = cfg["gross_margin_pct"]
+if mode == "Full Company (All Segments)":
+    MARKET_NAMES = ["SMB", "Mid-Market", "Enterprise", "Inbound"]
+    MARKET_KEYS = {"SMB": "smb", "Mid-Market": "mm", "Enterprise": "ent", "Inbound": "inb"}
+
+    fc1, fc2 = st.columns(8)[:2]
+    num_months = fc1.number_input("Horizon (months)", 6, 48, 24, key="fc_num_months",
+                                   help="How many months forward the model projects, starting from month 1 of new bookings. Shared across all 4 markets so the consolidated total is coherent.")
+    gross_margin_pct = fc2.number_input("Gross margin % (for LTV)", 0.0, 1.0, 0.75, step=0.01, key="fc_gm",
+                                         help="Used for LTV. Blended gross margin on subscription revenue. Used only in the LTV formula: LTV = ARPA × Gross Margin ÷ Annual Churn Rate.")
+
+    cfgs = {}
+    for market in MARKET_NAMES:
+        with st.expander(market, expanded=True):
+            cfg_m = render_inputs(MARKET_KEYS[market], market, num_months_default=num_months,
+                                   fixed_segment=market, show_horizon=False)
+            att = attainment_summary(cfg_m, num_months)
+            if att["avg_attainment_pct"] is not None:
+                st.caption(
+                    f"Avg AE Attainment: {att['avg_attainment_pct']:.1f}% · "
+                    f"Capacity-bound in {att['months_capacity_bound']}/{att['total_months']} months. "
+                    + ("AEs are fully utilized — more pipeline alone won't grow bookings here."
+                       if att["months_capacity_bound"] == att["total_months"]
+                       else "AEs have slack capacity — more pipeline (marketing/BDR) can still convert to bookings.")
+                )
+            cfgs[market] = cfg_m
 
     # -----------------------------------------------------------------
     # EXISTING CUSTOMER BOOK (optional) — top-line ARR/revenue overlay,
@@ -545,12 +680,23 @@ if mode == "Single Scenario":
                         )
 
     try:
-        result = run_full_model(cfg, num_months)
+        results = {m: run_full_model(cfgs[m], num_months) for m in MARKET_NAMES}
     except Exception as e:
         st.error(f"Model error: {e}")
         st.stop()
 
-    phase1_df, phase2_df, renewals_df = result["phase1_df"], result["phase2_df"], result["renewals_df"]
+    selected_markets = st.multiselect(
+        "Markets to include", MARKET_NAMES, default=MARKET_NAMES, key="fc_market_filter",
+        help="Governs the Executive Dashboard and every tab below — charts/metrics show the sum across whichever markets are selected here, and raw data tables break out each selected market separately underneath the combined view.",
+    )
+    if not selected_markets:
+        st.warning("Select at least one market above to see results.")
+        st.stop()
+
+    phase1_df = combine_phase1_dfs([results[m]["phase1_df"] for m in selected_markets])
+    phase2_df = combine_phase2_dfs([results[m]["phase2_df"] for m in selected_markets])
+    renewals_df = pd.concat([results[m]["renewals_df"] for m in selected_markets], ignore_index=True)
+    all_contracts = [c for m in selected_markets for c in results[m]["all_contracts"]]
 
     eb_base_arr = derived_metrics.base_arr if derived_metrics is not None else 0.0
     eb_base_logos = derived_metrics.base_logo_count if derived_metrics is not None else 0
@@ -566,7 +712,7 @@ if mode == "Single Scenario":
     with tabs[0]:
         st.caption("ARR, revenue, retention and key forecast drivers.")
         annual = aggregate_periods(
-            phase2_df, renewals_df, existing_book_df, result["all_contracts"], num_months,
+            phase2_df, renewals_df, existing_book_df, all_contracts, num_months,
             period_months=12, gross_margin_pct=gross_margin_pct,
             existing_book_base_arr=eb_base_arr, existing_book_base_logos=eb_base_logos,
         )
@@ -576,9 +722,23 @@ if mode == "Single Scenario":
         # comes straight from Phase 2 (revenue_recognition_engine.py) elsewhere
         # in this app. See _LABELS for the full explanation.
         annual = annual.rename(columns={"new_arr_booked": "new_arr_live"})
+        # Per-period deferred revenue for the "By Year" table below — not an
+        # aggregate_periods() field (it's a point-in-time balance, not a
+        # period sum), so pulled from combined phase2_df at each forecast
+        # period's last month. annual's row order matches period index p
+        # exactly (aggregate_periods builds it that way), so position i's
+        # end month is min((i+1)*12, num_months).
+        annual["deferred_revenue"] = [
+            (lambda match: match.iloc[0] if len(match) else None)(
+                phase2_df.loc[phase2_df["month"] == min((i + 1) * 12, num_months), "deferred_revenue_balance"]
+            )
+            for i in range(len(annual))
+        ]
         annual["type"] = "Forecast"
 
         if historical_annual is not None and len(historical_annual) > 0:
+            historical_annual = historical_annual.copy()
+            historical_annual["deferred_revenue"] = None  # no deferred-revenue concept in a revenue extract
             combined_annual = pd.concat([historical_annual, annual], ignore_index=True)
         else:
             combined_annual = annual
@@ -591,7 +751,8 @@ if mode == "Single Scenario":
                 return None
             return latest[field] - prior[field]
 
-        st.subheader(f"{cfg['pod_name']} — {latest['period']}")
+        st.subheader(f"Full Company — {latest['period']}")
+        st.caption(f"Markets included: {', '.join(selected_markets)}.")
         if historical_annual is not None and len(historical_annual) > 0:
             st.caption(f"Showing {len(historical_annual)} year(s) of actuals from your extract, "
                        f"continuing into {len(annual)} year(s) of forecast.")
@@ -604,34 +765,10 @@ if mode == "Single Scenario":
                 "just one team. Not included: professional services fees, seasonality, Existing Book overlay. "
                 "Annual summary covers full years only."
             )
-            other_presets = [p for p in _PRESET_DEFAULTS.keys() if p != cfg["pod_name"]]
-            additional = st.multiselect(
-                f"Add other standard segments alongside '{cfg['pod_name']}' (currently configured in the sidebar)",
-                other_presets, default=other_presets,
-            )
+            st.caption(f"This export covers the markets currently selected above: {', '.join(selected_markets)}.")
             try:
-                cfg_list = [cfg]
-                for preset_name in additional:
-                    preset_cfg = dict(cfg)  # inherit shared settings (execution_efficiency, seasonality=None, etc.)
-                    preset_dict = _PRESET_DEFAULTS[preset_name]
-                    mapped = {_PRESET_SUFFIX_TO_CFG_FIELD[k]: v for k, v in preset_dict.items()
-                              if k in _PRESET_SUFFIX_TO_CFG_FIELD}
-                    mapped["ae_quota"] = preset_dict["ae_quota_m"] * 1_000_000  # millions -> raw $, unit conversion
-                    # Comp isn't in presets anymore — derive the same smart default render_inputs() uses
-                    default_ae_ote = mapped["ae_quota"] / 5.5
-                    mapped.setdefault("ae_base", default_ae_ote / 2)
-                    mapped.setdefault("ae_variable", default_ae_ote / 2)
-                    mapped.setdefault("bdr_base", 55_000)
-                    mapped.setdefault("bdr_variable", 30_000)
-                    preset_cfg.update(mapped)
-                    preset_cfg["pod_name"] = preset_name
-                    preset_cfg["ae_hire_months"] = None
-                    preset_cfg["bdr_hire_months"] = None
-                    cfg_list.append(preset_cfg)
-
+                cfg_list = [cfgs[m] for m in selected_markets]
                 xlsx_bytes = generate_multi_pod_workbook_bytes(cfg_list, num_months)
-                segment_names = ", ".join(c["pod_name"] for c in cfg_list)
-                st.caption(f"This export covers: {segment_names}")
                 st.download_button(
                     "Download financial_model.xlsx",
                     data=xlsx_bytes,
@@ -673,6 +810,16 @@ if mode == "Single Scenario":
                        delta=f"{logo_churn_delta:.1f} pts" if logo_churn_delta is not None else None, delta_color="inverse")
             m3.metric("Customer LTV", f"${latest['ltv']:,.0f}" if latest["ltv"] is not None else "—")
 
+        st.markdown("**By Year**")
+        by_year = pd.DataFrame({
+            "Ending ARR": combined_annual["ending_arr"].apply(lambda v: f"${v:,.0f}" if pd.notna(v) else "—"),
+            "Recognized Revenue": combined_annual["revenue"].apply(lambda v: f"${v:,.0f}" if pd.notna(v) else "—"),
+            "NRR": combined_annual["nrr_pct"].apply(lambda v: f"{v:.1f}%" if pd.notna(v) else "—"),
+            "Live Accounts": combined_annual["ending_logos"].apply(lambda v: f"{int(v):,}" if pd.notna(v) else "—"),
+            "Deferred Revenue": combined_annual["deferred_revenue"].apply(lambda v: f"${v:,.0f}" if pd.notna(v) else "—"),
+        }, index=combined_annual["period"]).T
+        st.dataframe(by_year, width='stretch')
+
         st.divider()
 
         if len(combined_annual) > 1:
@@ -710,7 +857,7 @@ if mode == "Single Scenario":
 
             st.markdown("**Quarterly**")
             quarterly = aggregate_periods(
-                phase2_df, renewals_df, existing_book_df, result["all_contracts"], num_months,
+                phase2_df, renewals_df, existing_book_df, all_contracts, num_months,
                 period_months=3, existing_book_base_arr=eb_base_arr, existing_book_base_logos=eb_base_logos,
             )
             quarterly = quarterly.rename(columns={"new_arr_booked": "new_arr_live"})
@@ -754,20 +901,35 @@ if mode == "Single Scenario":
 
     with tabs[0 + tab_offset]:
         st.subheader("Bookings: Capacity vs. Demand Constraint")
-        st.caption("Actual bookings are constrained by whichever is lower: qualified demand or sales capacity.")
+        st.caption("Actual bookings are constrained by whichever is lower: qualified demand or sales capacity. "
+                    "All bookings figures on this tab are TCV (Total Contract Value) — the same unit as Avg Deal Size and AE quota — not ARR.")
+        with st.expander("What do these terms mean?"):
+            st.markdown(
+                "- **Capacity-Constrained Bookings (TCV)** — what AEs *could* close this month given headcount, ramp, and quota alone.\n"
+                "- **Demand-Constrained Bookings (TCV)** — what the pipeline *could* support this month, given SQLs (marketing + BDR + AE self-sourced) × win rate × deal size.\n"
+                "- **Theoretical Bookings (TCV)** — the lower of the two above: the hard ceiling before execution/seasonality are applied.\n"
+                "- **Execution Efficiency** — a realism multiplier applied on top of that ceiling (deal slippage, discounting, a rep having a bad quarter). 1.0 = perfect execution.\n"
+                "- **Binding Constraint** — which side (CAPACITY or DEMAND) is actually limiting Actual Bookings this month. CAPACITY means AEs are maxed out; DEMAND means AEs have slack and more pipeline would close more."
+            )
         col1, col2, col3 = st.columns(3)
-        col1.metric("Total Bookings", f"${phase1_df['actual_bookings'].sum():,.0f}")
+        col1.metric("Total Bookings (TCV)", f"${phase1_df['actual_bookings'].sum():,.0f}")
         col2.metric("Total Cost of Capacity", f"${phase1_df['total_cost_of_capacity'].sum():,.0f}")
         months_capacity_bound = (phase1_df["binding_constraint"] == "CAPACITY").sum()
         col3.metric("Months Capacity-Bound", f"{months_capacity_bound}/{len(phase1_df)}")
         st.info(f"Binding constraint: Capacity in {months_capacity_bound} of {len(phase1_df)} months.")
         st.line_chart(phase1_df.set_index("month")[["capacity_constrained_bookings", "demand_constrained_bookings", "actual_bookings"]].rename(
-            columns={"capacity_constrained_bookings": "Capacity-Constrained Bookings",
-                     "demand_constrained_bookings": "Demand-Constrained Bookings", "actual_bookings": "Actual Bookings"}
+            columns={"capacity_constrained_bookings": "Capacity-Constrained Bookings (TCV)",
+                     "demand_constrained_bookings": "Demand-Constrained Bookings (TCV)", "actual_bookings": "Actual Bookings (TCV)"}
         ))
 
         with st.expander("View underlying data"):
+            st.caption("Execution Efficiency, Seasonal Multiplier and Pipeline Coverage aren't shown in the combined "
+                       "view — they're set per market and have no single meaningful combined value. See each market below.")
+            st.markdown("**Combined (selected markets)**")
             st.dataframe(style_wide(wide(phase1_df)), width='stretch')
+            for m in selected_markets:
+                st.markdown(f"**{m}**")
+                st.dataframe(style_wide(wide(results[m]["phase1_df"])), width='stretch')
 
     with tabs[1 + tab_offset]:
         st.subheader("Live ARR Trajectory")
@@ -785,7 +947,11 @@ if mode == "Single Scenario":
         ))
 
         with st.expander("View underlying data"):
+            st.markdown("**Combined (selected markets)**")
             st.dataframe(style_wide(wide(phase2_df)), width='stretch')
+            for m in selected_markets:
+                st.markdown(f"**{m}**")
+                st.dataframe(style_wide(wide(results[m]["phase2_df"])), width='stretch')
 
     with tabs[2 + tab_offset]:
         st.subheader("Renewal Cohort Summary")
@@ -797,7 +963,13 @@ if mode == "Single Scenario":
             col3.metric("Total Expansion ARR", f"${summary['total_expansion_arr']:,.0f}")
             st.info(summary["nrr_benchmark_check"])
             with st.expander("View underlying data"):
-                st.dataframe(style_wide(wide(renewals_df)), width='stretch')
+                st.markdown("**Combined (selected markets)**")
+                st.dataframe(style_wide(wide(combine_renewals_for_display(renewals_df))), width='stretch')
+                for m in selected_markets:
+                    market_renewals = results[m]["renewals_df"]
+                    if len(market_renewals) > 0:
+                        st.markdown(f"**{m}**")
+                        st.dataframe(style_wide(wide(market_renewals)), width='stretch')
         else:
             st.info("No renewal events occurred — scenario length may be shorter than the contract term.")
 
