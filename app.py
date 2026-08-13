@@ -31,6 +31,7 @@ st.markdown("""
 
 st.title("Revenue Architecture — Pipeline, Recognition & Renewal Model")
 st.caption("Bowtie Model (Winning by Design) — deterministic, no randomization. Every number traces to an explicit input.")
+st.caption("Model how GTM capacity, pipeline, implementation timing and customer retention translate into ARR and recognized revenue. Start by selecting a segment and adjusting the assumptions below.")
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +55,7 @@ def wide(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 _CURRENCY_FIELDS = {
     "capacity_constrained_bookings", "demand_constrained_bookings", "theoretical_bookings", "actual_bookings",
-    "ae_cost", "bdr_cost", "total_cost_of_capacity", "new_bookings_tcv", "new_arr_booked", "arpa_new_accounts",
+    "ae_cost", "bdr_cost", "total_cost_of_capacity", "new_bookings_tcv", "new_arr_booked", "new_arr_live", "arpa_new_accounts",
     "cumulative_arr_booked", "blended_arpa_booked", "live_arr", "blended_arpa_live", "subscription_billings",
     "subscription_revenue_recognized", "ps_fee_billings", "ps_fee_revenue_recognized", "total_billings",
     "total_revenue_recognized", "cumulative_billings", "cumulative_revenue_recognized", "deferred_revenue_balance",
@@ -110,27 +111,35 @@ _LABELS = {
     "ae_cost": "AE Cost", "bdr_cost": "BDR Cost", "total_cost_of_capacity": "Total Cost of Capacity",
     "cost_per_dollar_booked": "Cost per $ Booked",
     "new_bookings_tcv": "New Bookings (TCV)", "new_accounts_signed": "New Accounts Signed",
-    "new_arr_booked": "New ARR", "arpa_new_accounts": "ARPA — New Accounts",
+    # "new_arr_booked" is genuinely signed-date-based here (Phase 2 output —
+    # revenue_recognition_engine.py, c.signed_month == month). The SAME field
+    # name is reused in saas_metrics.py's annual/quarterly rollup for a
+    # go-live-date-based figure instead — a real naming collision across two
+    # dataframes. That one is renamed to "new_arr_live" locally in app.py
+    # (see aggregate_periods() call sites) precisely so it doesn't share this
+    # label and get misread as booking-date-based.
+    "new_arr_booked": "New ARR Booked (Signed)", "new_arr_live": "New ARR (Went Live)",
+    "arpa_new_accounts": "ARPA — New Accounts",
     "cumulative_accounts_signed": "Cumulative Accounts Signed", "cumulative_arr_booked": "Cumulative ARR Booked",
-    "blended_arpa_booked": "Blended ARPA — Booked", "live_accounts": "Live Accounts", "live_arr": "ARR",
-    "blended_arpa_live": "ARPA", "subscription_billings": "Subscription Billings",
-    "subscription_revenue_recognized": "Subscription Revenue", "ps_fee_billings": "PS Fee Billings",
-    "ps_fee_revenue_recognized": "PS Fee Revenue", "total_billings": "Total Billings",
-    "total_revenue_recognized": "Total Revenue", "cumulative_billings": "Cumulative Billings",
-    "cumulative_revenue_recognized": "Cumulative Revenue", "deferred_revenue_balance": "Deferred Revenue",
+    "blended_arpa_booked": "Blended ARPA — Booked", "live_accounts": "Live Accounts", "live_arr": "Live ARR",
+    "blended_arpa_live": "ARPA (Live)", "subscription_billings": "Subscription Billings",
+    "subscription_revenue_recognized": "Subscription Revenue Recognized", "ps_fee_billings": "PS Fee Billings",
+    "ps_fee_revenue_recognized": "PS Fee Revenue Recognized", "total_billings": "Total Billings",
+    "total_revenue_recognized": "Total Revenue Recognized", "cumulative_billings": "Cumulative Billings",
+    "cumulative_revenue_recognized": "Cumulative Revenue Recognized", "deferred_revenue_balance": "Deferred Revenue",
     "implementation_backlog_value": "Implementation Backlog ($)", "implementation_backlog_count": "Implementation Backlog (#)",
     "pod_name": "Pod", "logos_up_for_renewal": "Logos Up for Renewal", "arr_up_for_renewal": "ARR Up for Renewal",
     "churn_rate_applied_pct": "Churn Rate Applied", "churned_arr": "Churned ARR", "expansion_arr": "Expansion ARR",
     "contraction_arr": "Contraction ARR", "renewed_arr": "Renewed ARR", "logos_retained_expected": "Logos Retained (Expected)",
     "nrr_this_cohort_pct": "NRR — This Cohort",
-    "existing_book_arr": "Existing Book ARR", "new_business_live_arr": "New Business ARR", "total_arr": "Total ARR",
+    "existing_book_arr": "Existing Book ARR", "new_business_live_arr": "New Business ARR (Live)", "total_arr": "Total ARR",
     "existing_book_monthly_revenue": "Existing Book Revenue", "existing_book_churn_dollar": "Existing Book Churn ($)",
     "existing_book_expansion_dollar": "Existing Book Expansion ($)", "existing_book_contraction_dollar": "Existing Book Contraction ($)",
     "existing_book_logo_count": "Existing Book Customers", "existing_book_logos_churned": "Existing Book Customers Churned",
     "beginning_arr": "Beginning ARR", "ending_arr": "Ending ARR", "nrr_pct": "Net Revenue Retention (NRR)",
     "gross_dollar_churn_rate_pct": "Gross $ Churn Rate", "beginning_logos": "Beginning Customers",
     "ending_logos": "Ending Customers", "new_logos": "New Customers", "churned_logos": "Churned Customers",
-    "logo_churn_rate_pct": "Logo Churn Rate", "revenue": "Revenue", "arpa_ending": "ARPA",
+    "logo_churn_rate_pct": "Logo Churn Rate", "revenue": "Recognized Revenue", "arpa_ending": "ARPA",
     "ltv": "Customer LTV", "other_boundary_effect": "Other / Boundary Effect",
 }
 
@@ -218,8 +227,8 @@ def render_inputs(key: str, label: str, num_months_default: int = 24, show_gross
     # stretching across 1/2 or 1/3 of the page.
     top1, top2, top3, *_ = st.columns(8)
     if show_gross_margin:
-        gross_margin_pct = top3.number_input("Gross margin % (for LTV)", 0.0, 1.0, 0.75, step=0.01, key=f"{key}_gm",
-                                              help="Blended gross margin on subscription revenue. Used only in the LTV formula: LTV = ARPA × Gross Margin ÷ Annual Churn Rate.")
+        gross_margin_pct = top3.number_input("Gross margin %", 0.0, 1.0, 0.75, step=0.01, key=f"{key}_gm",
+                                              help="Used for LTV. Blended gross margin on subscription revenue. Used only in the LTV formula: LTV = ARPA × Gross Margin ÷ Annual Churn Rate.")
     else:
         gross_margin_pct = None
     pod_preset = top1.selectbox(
@@ -470,8 +479,8 @@ if mode == "Single Scenario":
     derived_metrics = None
     historical_annual = None
 
-    include_existing = st.checkbox("Include existing customer book (optional)", value=False,
-                                    help="Layer a top-line ARR/revenue overlay for your pre-existing customer base (derived from a real revenue extract) on top of the new-business model above. Runs alongside, not through, the Contract engine.")
+    include_existing = st.checkbox("Use historical customer data to ground the forecast", value=False,
+                                    help="Upload customer-level monthly revenue to derive historical NRR, churn and expansion and project the existing customer base alongside new business.")
 
     if include_existing:
         with st.expander("Existing Customer Book", expanded=True):
@@ -512,7 +521,7 @@ if mode == "Single Scenario":
                             f"Derived NRR: {derived_metrics.nrr_pct}% "
                             f"({derived_metrics.customers_matched} matched, {derived_metrics.customers_churned} churned)"
                         )
-                        historical_annual = derive_annual_history(matrix)
+                        historical_annual = derive_annual_history(matrix).rename(columns={"new_arr_booked": "new_arr_live"})
 
                         override = st.checkbox("Override derived rates manually", value=False,
                                                 help="The derived rates above come straight from your data — this lets you adjust them (e.g. if you know a one-off event skewed the numbers).")
@@ -546,7 +555,7 @@ if mode == "Single Scenario":
     eb_base_arr = derived_metrics.base_arr if derived_metrics is not None else 0.0
     eb_base_logos = derived_metrics.base_logo_count if derived_metrics is not None else 0
 
-    tab_names = ["📐 SaaS Metrics Dashboard", "📈 Pipeline & Capacity", "💰 Revenue Recognition", "🔄 Renewals & NRR"]
+    tab_names = ["📐 Executive Dashboard", "📈 Pipeline & Capacity", "💰 Revenue Recognition", "🔄 Renewals & NRR"]
     if existing_book_df is not None:
         tab_names.insert(1, "🏢 Total Company")
     tabs = st.tabs(tab_names)
@@ -555,11 +564,18 @@ if mode == "Single Scenario":
         tab_offset = 2
 
     with tabs[0]:
+        st.caption("ARR, revenue, retention and key forecast drivers.")
         annual = aggregate_periods(
             phase2_df, renewals_df, existing_book_df, result["all_contracts"], num_months,
             period_months=12, gross_margin_pct=gross_margin_pct,
             existing_book_base_arr=eb_base_arr, existing_book_base_logos=eb_base_logos,
         )
+        # aggregate_periods()'s "new_arr_booked" is go-live-date-based (see
+        # saas_metrics.py docstring), not signed-date — renamed locally so it
+        # doesn't collide with the genuinely signed-date "new_arr_booked" that
+        # comes straight from Phase 2 (revenue_recognition_engine.py) elsewhere
+        # in this app. See _LABELS for the full explanation.
+        annual = annual.rename(columns={"new_arr_booked": "new_arr_live"})
         annual["type"] = "Forecast"
 
         if historical_annual is not None and len(historical_annual) > 0:
@@ -571,7 +587,7 @@ if mode == "Single Scenario":
         prior = combined_annual.iloc[-2] if len(combined_annual) > 1 else None
 
         def _delta(field):
-            if prior is None or prior[field] in (None, 0):
+            if prior is None or pd.isna(prior[field]) or prior[field] == 0 or pd.isna(latest[field]):
                 return None
             return latest[field] - prior[field]
 
@@ -580,7 +596,7 @@ if mode == "Single Scenario":
             st.caption(f"Showing {len(historical_annual)} year(s) of actuals from your extract, "
                        f"continuing into {len(annual)} year(s) of forecast.")
 
-        with st.expander("📥 Download as financial model (Excel — multi-segment)"):
+        with st.expander("↓ Export Auditable Excel Model", icon="📥"):
             st.caption(
                 "Real formulas, not pasted values — auditable in Excel, shareable with bankers/investors/corp dev. "
                 "One Capacity + Revenue sheet pair per segment, plus a consolidated Summary with per-segment "
@@ -625,17 +641,37 @@ if mode == "Single Scenario":
             except Exception as e:
                 st.error(f"Couldn't generate the workbook: {e}")
 
+        # Hero tiles: primary audience is FP&A/CFO, not investors — accounting-
+        # operational metrics (Recognized Revenue, Deferred Revenue) take
+        # priority over investor-deck metrics (LTV, GRR), which move to the
+        # secondary "More metrics" expander below instead of disappearing.
+        ending_deferred_revenue = phase2_df["deferred_revenue_balance"].iloc[-1]
+
+        revenue_delta = _delta("revenue")
+        logos_delta = _delta("ending_logos")
+        nrr_delta = _delta("nrr_pct")
+
         c1, c2, c3, c4, c5 = st.columns(5)
         arr_growth_pct = ((latest["ending_arr"] / prior["ending_arr"]) - 1) * 100 if prior is not None and prior["ending_arr"] else None
-        c1.metric("ARR", f"${latest['ending_arr']:,.0f}",
+        c1.metric("Ending ARR", f"${latest['ending_arr']:,.0f}",
                    delta=f"{arr_growth_pct:.1f}% YoY" if arr_growth_pct is not None else None)
-        c2.metric("Net Revenue Retention", f"{latest['nrr_pct']:.1f}%" if latest["nrr_pct"] is not None else "—",
-                   delta=_delta("nrr_pct"), delta_color="normal")
-        grr = 100 - latest["gross_dollar_churn_rate_pct"] if latest["gross_dollar_churn_rate_pct"] is not None else None
-        c3.metric("Gross Revenue Retention", f"{grr:.1f}%" if grr is not None else "—")
-        c4.metric("Logo Churn Rate", f"{latest['logo_churn_rate_pct']:.1f}%" if latest["logo_churn_rate_pct"] is not None else "—",
-                   delta=_delta("logo_churn_rate_pct"), delta_color="inverse")
-        c5.metric("Customer LTV", f"${latest['ltv']:,.0f}" if latest["ltv"] is not None else "—")
+        c2.metric("Recognized Revenue", f"${latest['revenue']:,.0f}" if latest["revenue"] is not None else "—",
+                   delta=f"${revenue_delta:,.0f}" if revenue_delta is not None else None)
+        c3.metric("Net Revenue Retention", f"{latest['nrr_pct']:.1f}%" if latest["nrr_pct"] is not None else "—",
+                   delta=f"{nrr_delta:.1f} pts" if nrr_delta is not None else None, delta_color="normal")
+        c4.metric("Live Accounts", f"{int(latest['ending_logos']):,}" if latest["ending_logos"] is not None else "—",
+                   delta=f"{logos_delta:,.0f}" if logos_delta is not None else None)
+        c5.metric("Deferred Revenue", f"${ending_deferred_revenue:,.0f}",
+                   help="New-business deferred revenue balance (billed but not yet recognized). Doesn't include the Existing Book overlay — a revenue extract has no individual contract dates to derive a deferred balance from.")
+
+        with st.expander("More metrics (GRR, Logo Churn, LTV)"):
+            m1, m2, m3 = st.columns(3)
+            grr = 100 - latest["gross_dollar_churn_rate_pct"] if latest["gross_dollar_churn_rate_pct"] is not None else None
+            m1.metric("Gross Revenue Retention", f"{grr:.1f}%" if grr is not None else "—")
+            logo_churn_delta = _delta("logo_churn_rate_pct")
+            m2.metric("Logo Churn Rate", f"{latest['logo_churn_rate_pct']:.1f}%" if latest["logo_churn_rate_pct"] is not None else "—",
+                       delta=f"{logo_churn_delta:.1f} pts" if logo_churn_delta is not None else None, delta_color="inverse")
+            m3.metric("Customer LTV", f"${latest['ltv']:,.0f}" if latest["ltv"] is not None else "—")
 
         st.divider()
 
@@ -654,15 +690,16 @@ if mode == "Single Scenario":
             st.plotly_chart(arr_fig, width='stretch')
 
         st.caption(f"ARR Bridge — {latest['period']}")
-        wf_labels = ["Beginning<br>ARR", "New<br>Business", "Expansion", "Contraction", "Churn", "Other /<br>Boundary", "Ending<br>ARR"]
-        wf_values = [latest["beginning_arr"], latest["new_arr_booked"], latest["expansion_arr"],
+        wf_labels = ["Beginning<br>ARR", "New ARR<br>(Went Live)", "Expansion", "Contraction", "Churn", "Other /<br>Boundary", "Ending<br>ARR"]
+        wf_values = [latest["beginning_arr"], latest["new_arr_live"], latest["expansion_arr"],
                      -latest["contraction_arr"], -latest["churned_arr"], latest["other_boundary_effect"], latest["ending_arr"]]
         st.plotly_chart(make_waterfall(wf_labels, wf_values, ""), width='stretch')
 
         with st.expander("View underlying data"):
             st.caption(
-                "'New ARR' is ARR that went LIVE this period (by go-live date), not ARR signed — "
-                "those differ once implementation lag is involved. LTV is annual-only: a single "
+                "'New ARR (Went Live)' is ARR that went LIVE this period (by go-live date), not ARR signed — "
+                "those differ once implementation lag is involved. That's distinct from 'New ARR Booked (Signed)', "
+                "shown in the Revenue Recognition tab's raw data, which is signed-date-based. LTV is annual-only: a single "
                 "quarter's churn rate is too noisy to use as an LTV input. Historical actual years "
                 "have no LTV (gross margin isn't in a revenue extract) and the earliest actual year "
                 "has no NRR/churn (no prior-year baseline to compare against)."
@@ -676,6 +713,7 @@ if mode == "Single Scenario":
                 phase2_df, renewals_df, existing_book_df, result["all_contracts"], num_months,
                 period_months=3, existing_book_base_arr=eb_base_arr, existing_book_base_logos=eb_base_logos,
             )
+            quarterly = quarterly.rename(columns={"new_arr_booked": "new_arr_live"})
             num_years = (num_months + 11) // 12
             for y in range(num_years):
                 year_quarters = quarterly[quarterly["period"].str.startswith(f"Y{y+1}-")]
@@ -694,9 +732,11 @@ if mode == "Single Scenario":
 
             c1, c2, c3 = st.columns(3)
             c1.metric("Existing Book — Ending ARR", f"${existing_book_df['existing_book_arr'].iloc[-1]:,.0f}")
-            c2.metric("New Business — Ending ARR", f"${phase2_df['live_arr'].iloc[-1]:,.0f}")
+            c2.metric("New Business — Ending Live ARR", f"${phase2_df['live_arr'].iloc[-1]:,.0f}")
             c3.metric("Total Company — Ending ARR", f"${combined['total_arr'].iloc[-1]:,.0f}")
-            st.line_chart(combined.set_index("month")[["existing_book_arr", "new_business_live_arr", "total_arr"]])
+            st.line_chart(combined.set_index("month")[["existing_book_arr", "new_business_live_arr", "total_arr"]].rename(
+                columns={"existing_book_arr": "Existing Book ARR", "new_business_live_arr": "New Business ARR (Live)", "total_arr": "Total ARR"}
+            ))
 
             d1, d2, d3, d4 = st.columns(4)
             d1.metric("Extract — Base ARR", f"${derived_metrics.base_arr:,.0f}")
@@ -714,25 +754,35 @@ if mode == "Single Scenario":
 
     with tabs[0 + tab_offset]:
         st.subheader("Bookings: Capacity vs. Demand Constraint")
+        st.caption("Actual bookings are constrained by whichever is lower: qualified demand or sales capacity.")
         col1, col2, col3 = st.columns(3)
         col1.metric("Total Bookings", f"${phase1_df['actual_bookings'].sum():,.0f}")
         col2.metric("Total Cost of Capacity", f"${phase1_df['total_cost_of_capacity'].sum():,.0f}")
         months_capacity_bound = (phase1_df["binding_constraint"] == "CAPACITY").sum()
         col3.metric("Months Capacity-Bound", f"{months_capacity_bound}/{len(phase1_df)}")
-        st.line_chart(phase1_df.set_index("month")[["capacity_constrained_bookings", "demand_constrained_bookings", "actual_bookings"]])
+        st.info(f"Binding constraint: Capacity in {months_capacity_bound} of {len(phase1_df)} months.")
+        st.line_chart(phase1_df.set_index("month")[["capacity_constrained_bookings", "demand_constrained_bookings", "actual_bookings"]].rename(
+            columns={"capacity_constrained_bookings": "Capacity-Constrained Bookings",
+                     "demand_constrained_bookings": "Demand-Constrained Bookings", "actual_bookings": "Actual Bookings"}
+        ))
 
         with st.expander("View underlying data"):
             st.dataframe(style_wide(wide(phase1_df)), width='stretch')
 
     with tabs[1 + tab_offset]:
         st.subheader("Live ARR Trajectory")
+        st.caption("Bookings ≠ revenue. Implementation lag delays go-live and revenue recognition, creating a gap between contracted ARR, billings and recognized revenue.")
         col1, col2, col3 = st.columns(3)
         col1.metric("Ending Live ARR", f"${phase2_df['live_arr'].iloc[-1]:,.0f}")
         col2.metric("Ending Deferred Revenue", f"${phase2_df['deferred_revenue_balance'].iloc[-1]:,.0f}")
         col3.metric("Ending Live Accounts", f"{int(phase2_df['live_accounts'].iloc[-1])}")
-        st.line_chart(phase2_df.set_index("month")[["live_arr", "cumulative_arr_booked"]])
+        st.line_chart(phase2_df.set_index("month")[["live_arr", "cumulative_arr_booked"]].rename(
+            columns={"live_arr": "Live ARR", "cumulative_arr_booked": "Cumulative ARR Booked"}
+        ))
         st.subheader("Revenue Streams")
-        st.bar_chart(phase2_df.set_index("month")[["subscription_revenue_recognized", "ps_fee_revenue_recognized"]])
+        st.bar_chart(phase2_df.set_index("month")[["subscription_revenue_recognized", "ps_fee_revenue_recognized"]].rename(
+            columns={"subscription_revenue_recognized": "Subscription Revenue Recognized", "ps_fee_revenue_recognized": "PS Fee Revenue Recognized"}
+        ))
 
         with st.expander("View underlying data"):
             st.dataframe(style_wide(wide(phase2_df)), width='stretch')
@@ -755,19 +805,28 @@ if mode == "Single Scenario":
 # COMPARE TWO SCENARIOS MODE
 # ===========================================================================
 else:
-    with st.expander("Scenario A", expanded=True):
-        cfg_a = render_inputs("a", "Scenario A Inputs")
-    with st.expander("Scenario B", expanded=True):
-        cfg_b = render_inputs("b", "Scenario B Inputs")
+    # User-editable scenario names — let labels read as actual business
+    # scenarios ("Base Plan" vs. "Aggressive Hiring") instead of the generic
+    # "Scenario A"/"Scenario B" everywhere below reads from these two
+    # variables now, so a custom name propagates through every chart, table
+    # and metric label in this mode.
+    name1, name2 = st.columns(2)
+    scenario_a_name = name1.text_input("Scenario A label", "Scenario A — Base Plan", key="scenario_a_label")
+    scenario_b_name = name2.text_input("Scenario B label", "Scenario B — Alternative Plan", key="scenario_b_label")
+
+    with st.expander(scenario_a_name, expanded=True):
+        cfg_a = render_inputs("a", scenario_a_name)
+    with st.expander(scenario_b_name, expanded=True):
+        cfg_b = render_inputs("b", scenario_b_name)
 
     # Both scenarios must share one horizon for the bridge math to mean
-    # anything — bridging "Scenario A ending ARR" against "Scenario B ending
-    # ARR" from two different-length windows would be comparing apples to
+    # anything — bridging one scenario's ending ARR against the other's
+    # from two different-length windows would be comparing apples to
     # oranges. Scenario A's horizon governs; forced explicitly here rather
     # than just hoping the user sets both fields the same.
     if cfg_a["num_months"] != cfg_b["num_months"]:
-        st.info(f"Scenario A's horizon ({cfg_a['num_months']} months) governs both scenarios "
-                f"for a valid comparison — Scenario B's horizon setting is ignored.")
+        st.info(f"{scenario_a_name}'s horizon ({cfg_a['num_months']} months) governs both scenarios "
+                f"for a valid comparison — {scenario_b_name}'s horizon setting is ignored.")
     num_months = cfg_a["num_months"]
     cfg_b["num_months"] = num_months
 
@@ -786,12 +845,12 @@ else:
     with tab1:
         col1, col2 = st.columns(2)
         with col1:
-            st.subheader("Scenario A")
+            st.subheader(scenario_a_name)
             st.metric("Ending Live ARR", f"${p2a['live_arr'].iloc[-1]:,.0f}")
             st.metric("Total Revenue Recognized", f"${p2a['total_revenue_recognized'].sum():,.0f}")
             st.metric("Ending Deferred Revenue", f"${p2a['deferred_revenue_balance'].iloc[-1]:,.0f}")
         with col2:
-            st.subheader("Scenario B")
+            st.subheader(scenario_b_name)
             st.metric("Ending Live ARR", f"${p2b['live_arr'].iloc[-1]:,.0f}",
                        delta=f"${p2b['live_arr'].iloc[-1] - p2a['live_arr'].iloc[-1]:,.0f}")
             st.metric("Total Revenue Recognized", f"${p2b['total_revenue_recognized'].sum():,.0f}",
@@ -800,13 +859,50 @@ else:
                        delta=f"${p2b['deferred_revenue_balance'].iloc[-1] - p2a['deferred_revenue_balance'].iloc[-1]:,.0f}")
 
     with tab2:
-        st.subheader("ARR Bridge: Scenario A → Scenario B")
+        # Compact answer-first table, before the waterfalls — Ending ARR,
+        # Recognized Revenue and NRR are the latest full-year figure (same
+        # scope as the Executive Dashboard's hero tiles); Capacity Cost is
+        # cumulative over the full horizon (there's no annual breakdown of
+        # capacity cost elsewhere in the app to stay consistent with).
+        cmp_annual_a = aggregate_periods(p2a, rna, None, result_a["all_contracts"], num_months, period_months=12)
+        cmp_annual_b = aggregate_periods(p2b, rnb, None, result_b["all_contracts"], num_months, period_months=12)
+        cmp_latest_a, cmp_latest_b = cmp_annual_a.iloc[-1], cmp_annual_b.iloc[-1]
+        capacity_cost_a = result_a["phase1_df"]["total_cost_of_capacity"].sum()
+        capacity_cost_b = result_b["phase1_df"]["total_cost_of_capacity"].sum()
+
+        col_a_label = scenario_a_name if scenario_a_name != scenario_b_name else f"{scenario_a_name} (A)"
+        col_b_label = scenario_b_name if scenario_a_name != scenario_b_name else f"{scenario_b_name} (B)"
+
+        def _fmt_dollar(v):
+            return f"${v:,.0f}" if v is not None and not pd.isna(v) else "—"
+
+        def _fmt_pct(v):
+            return f"{v:.1f}%" if v is not None and not pd.isna(v) else "—"
+
+        summary_table = pd.DataFrame([
+            {"Metric": "Ending ARR", col_a_label: _fmt_dollar(cmp_latest_a["ending_arr"]), col_b_label: _fmt_dollar(cmp_latest_b["ending_arr"]),
+             "Δ (B − A)": _fmt_dollar(cmp_latest_b["ending_arr"] - cmp_latest_a["ending_arr"])},
+            {"Metric": "Recognized Revenue", col_a_label: _fmt_dollar(cmp_latest_a["revenue"]), col_b_label: _fmt_dollar(cmp_latest_b["revenue"]),
+             "Δ (B − A)": _fmt_dollar(cmp_latest_b["revenue"] - cmp_latest_a["revenue"])},
+            {"Metric": "NRR", col_a_label: _fmt_pct(cmp_latest_a["nrr_pct"]), col_b_label: _fmt_pct(cmp_latest_b["nrr_pct"]),
+             "Δ (B − A)": (f"{cmp_latest_b['nrr_pct'] - cmp_latest_a['nrr_pct']:.1f} pts"
+                            if pd.notna(cmp_latest_a["nrr_pct"]) and pd.notna(cmp_latest_b["nrr_pct"]) else "—")},
+            {"Metric": "Capacity Cost", col_a_label: _fmt_dollar(capacity_cost_a), col_b_label: _fmt_dollar(capacity_cost_b),
+             "Δ (B − A)": _fmt_dollar(capacity_cost_b - capacity_cost_a)},
+        ])
+        st.dataframe(summary_table.set_index("Metric"), width='stretch')
+        st.caption("Ending ARR, Recognized Revenue and NRR reflect the latest full year; Capacity Cost is cumulative over the full horizon.")
+
+        st.divider()
+        st.subheader(f"ARR Bridge: {scenario_a_name} → {scenario_b_name}")
         st.caption(
             "Decomposed using each scenario's own cumulative New Business / Expansion / "
             "Contraction / Churn totals. This is an additive approximation, not a controlled "
             "marginal attribution — cascading renewal timing across months creates real "
             "interaction effects between drivers, shown explicitly as 'Other / interaction' "
-            "below rather than hidden or forced to zero."
+            "below rather than hidden or forced to zero. Note: 'Δ New Business (Booked)' is "
+            "signed-date-based (Phase 2 bookings), not go-live-date-based like the Executive "
+            "Dashboard's 'New ARR (Went Live)' bridge component — the two aren't directly comparable."
         )
         start_arr = p2a["live_arr"].iloc[-1]
         end_arr = p2b["live_arr"].iloc[-1]
@@ -817,14 +913,14 @@ else:
         other = end_arr - (start_arr + d_new + d_exp + d_contr + d_churn)
 
         fig_arr = make_waterfall(
-            ["Scenario A<br>Ending ARR", "Δ New Business", "Δ Expansion", "Δ Contraction", "Δ Churn", "Other /<br>Interaction", "Scenario B<br>Ending ARR"],
+            [f"{scenario_a_name}<br>Ending ARR", "Δ New Business<br>(Booked)", "Δ Expansion", "Δ Contraction", "Δ Churn", "Other /<br>Interaction", f"{scenario_b_name}<br>Ending ARR"],
             [start_arr, d_new, d_exp, d_contr, d_churn, other, end_arr],
             "ARR Bridge",
         )
         st.plotly_chart(fig_arr, width='stretch')
 
         st.divider()
-        st.subheader("Revenue Bridge: Scenario A → Scenario B")
+        st.subheader(f"Revenue Bridge: {scenario_a_name} → {scenario_b_name}")
         st.caption(
             "Cumulative total revenue recognized over the full window, decomposed by origin "
             "(new-business subscription vs. renewal-driven subscription) plus professional "
@@ -840,7 +936,7 @@ else:
         d_ps = rev_b["ps_fee"] - rev_a["ps_fee"]
 
         fig_rev = make_waterfall(
-            ["Scenario A<br>Total Revenue", "Δ New-Business<br>Subscription", "Δ Renewal-Driven<br>Subscription", "Δ PS Fees", "Scenario B<br>Total Revenue"],
+            [f"{scenario_a_name}<br>Total Revenue<br>Recognized", "Δ New-Business<br>Subscription", "Δ Renewal-Driven<br>Subscription", "Δ PS Fees", f"{scenario_b_name}<br>Total Revenue<br>Recognized"],
             [start_rev, d_sub_new, d_sub_renewal, d_ps, end_rev],
             "Revenue Bridge",
         )
@@ -848,9 +944,9 @@ else:
 
     with tab3:
         st.caption("Tables shown with months as columns, metrics as rows.")
-        st.subheader("Scenario A — Phase 2 Output")
+        st.subheader(f"{scenario_a_name} — Phase 2 Output")
         st.dataframe(style_wide(wide(p2a)), width='stretch')
-        st.subheader("Scenario B — Phase 2 Output")
+        st.subheader(f"{scenario_b_name} — Phase 2 Output")
         st.dataframe(style_wide(wide(p2b)), width='stretch')
 
 st.caption("Built on the Bowtie Model (Winning by Design). All math is deterministic — no randomized variables anywhere in this model.")
