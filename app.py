@@ -49,12 +49,18 @@ st.markdown("""
     h1.main-title {
         color: #163A63 !important;
         font-weight: 700 !important;
-        font-size: 32px !important;
+        font-size: 28px !important;
         line-height: 1.15 !important;
-        margin-bottom: 0 !important;
+        margin-bottom: 2px !important;
         padding-bottom: 0 !important;
     }
-    @media (max-width: 768px) { h1.main-title { font-size: 24px !important; } }
+    @media (max-width: 768px) { h1.main-title { font-size: 22px !important; } }
+
+    /* Header block vertical rhythm */
+    .header-block { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 2px solid #E2E8F0; }
+    .header-block .tagline { color: #64748B; font-size: 13px; line-height: 1.4; margin: 0; }
+    .dashboard-caption { font-size: 13px; color: #64748B; margin-top: 0 !important; margin-bottom: 4px !important; }
+    .dashboard-heading { margin-top: 0 !important; margin-bottom: 2px !important; }
 
     /* 3. Input Controls (Clean workspace) */
     div[data-testid="stNumberInput"] input { max-width: 110px; }
@@ -71,11 +77,11 @@ st.markdown("""
         font-weight: 500 !important;
         color: #334155 !important;
     }
-    .stSlider div[data-testid="stThumbValue"] { color: #2563EB !important; font-weight: 600; }
+    .stSlider div[data-testid="stThumbValue"] { color: #163A63 !important; font-weight: 600; }
     
     /* 4. Action Buttons */
     button[kind="primary"] {
-        background-color: #2563EB !important;
+        background-color: #163A63 !important;
         color: white !important;
         border-radius: 8px !important;
         font-weight: 600 !important;
@@ -148,14 +154,14 @@ st.markdown("""
     /* 8. Tabs */
     button[data-baseweb="tab"] { color: #475569 !important; font-weight: 500 !important; }
     button[data-baseweb="tab"][aria-selected="true"] { 
-        color: #2563EB !important; 
+        color: #163A63 !important; 
         font-weight: 600 !important; 
-        border-bottom: 2px solid #2563EB !important; 
+        border-bottom: 2px solid #163A63 !important; 
     }
     
     /* 9. Segmented Control & Callouts */
     div[data-testid="stSegmentedControl"] label { border-color: #CBD5E1 !important; color: #475569 !important; }
-    div[data-testid="stSegmentedControl"] label[data-checked="true"] { background-color: #EFF6FF !important; border-color: #2563EB !important; color: #2563EB !important; font-weight: 600 !important; }
+    div[data-testid="stSegmentedControl"] label[data-checked="true"] { background-color: #EFF6FF !important; border-color: #163A63 !important; color: #163A63 !important; font-weight: 600 !important; }
     
     /* Info Box styling */
     div[data-testid="stAlert"] { background-color: #EFF6FF !important; border: 1px solid #DBEAFE !important; border-radius: 8px !important; color: #475569 !important; }
@@ -164,7 +170,7 @@ st.markdown("""
     .streamlit-expanderHeader { font-weight: 600 !important; color: #172033 !important; background-color: #FFFFFF !important; border: 1px solid #E2E8F0 !important; border-radius: 8px;}
     
     /* Market Chips */
-    span[data-baseweb="tag"] { background-color: #2563EB !important; color: white !important; opacity: 0.9;}
+    span[data-baseweb="tag"] { background-color: #163A63 !important; color: white !important; opacity: 0.9;}
 
     /* 10. Bold dataframe headers (Glide Data Grid renders via canvas,
        so Styler.set_table_styles is ignored — these CSS variables are
@@ -173,64 +179,245 @@ st.markdown("""
         --gdg-header-font-style: 700 14px !important;
         --gdg-text-header: rgba(26, 34, 51, 0.9) !important;
     }
+
+    /* 11. Sidebar tweaks */
+    section[data-testid="stSidebar"] .block-container { padding-top: 1rem; }
+
+    /* 12. Reduce top whitespace in main content */
+    .stMainBlockContainer { padding-top: 1rem !important; }
+    header[data-testid="stHeader"] { height: auto !important; }
+
 </style>
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
-# Header — title + a global Reset All (clears every widget this app owns,
-# identified by key prefix, regardless of which mode is active) since reset
-# doesn't depend on any mode-specific data being computed yet.
+# Sidebar width presets (Narrow / Normal / Wide)
 # ---------------------------------------------------------------------------
+_SIDEBAR_WIDTHS = [260, 340, 480]
+_SIDEBAR_LABELS = ["Narrow", "Normal", "Wide"]
+
+if "sidebar_width_step" not in st.session_state:
+    st.session_state.sidebar_width_step = 1
+
+_sw = _SIDEBAR_WIDTHS[st.session_state.sidebar_width_step]
+st.markdown(
+    f"<style>section.stSidebar {{ min-width: {_sw}px !important; max-width: {_sw}px !important; width: {_sw}px !important; }}</style>",
+    unsafe_allow_html=True,
+)
+
 # ---------------------------------------------------------------------------
-# Header — title + top-right action buttons (Reset, Undo, and Export)
+# State management — Set Default / Undo / Reset
 # ---------------------------------------------------------------------------
+_MAX_HISTORY = 50
+
 def _is_resettable_key(k: str) -> bool:
+    if k.startswith("sm_"):
+        return False
     reset_prefixes = ("s_", "a_", "b_", "smb_", "mm_", "ent_", "inb_", "fc_")
     reset_exact = {"scenario_a_label", "scenario_b_label"}
     return k.startswith(reset_prefixes) or k in reset_exact or k.endswith("_applied_preset")
 
-header_left, header_actions = st.columns([2.5, 1.5], vertical_alignment="bottom")
+def _snapshot() -> dict:
+    return {k: v for k, v in st.session_state.items() if _is_resettable_key(k)}
 
-with header_left:
+def _restore(snapshot: dict):
+    for k in list(st.session_state.keys()):
+        if _is_resettable_key(k):
+            del st.session_state[k]
+    for k, v in snapshot.items():
+        st.session_state[k] = v
+
+def push_state():
+    """Push current assumption state onto the undo history stack.
+    Call this before applying any programmatic change (AI assistant, etc.)."""
+    snap = _snapshot()
+    history = st.session_state.get("sm_history", [])
+    history.append(snap)
+    if len(history) > _MAX_HISTORY:
+        history = history[-_MAX_HISTORY:]
+    st.session_state["sm_history"] = history
+    st.session_state["sm_last_known"] = snap
+
+if "sm_history" not in st.session_state:
+    st.session_state["sm_history"] = []
+if "sm_default" not in st.session_state:
+    st.session_state["sm_default"] = None
+if "sm_last_known" not in st.session_state:
+    st.session_state["sm_last_known"] = None
+
+if not st.session_state.get("sm_skip_push"):
+    current = _snapshot()
+    last = st.session_state["sm_last_known"]
+    if last is not None and current != last:
+        history = st.session_state["sm_history"]
+        history.append(last)
+        if len(history) > _MAX_HISTORY:
+            history = history[-_MAX_HISTORY:]
+        st.session_state["sm_history"] = history
+    if current:
+        st.session_state["sm_last_known"] = current
+else:
+    st.session_state["sm_skip_push"] = False
+    st.session_state["sm_last_known"] = _snapshot()
+
+# ---------------------------------------------------------------------------
+# AI ASSISTANT — Claude Haiku chat via FAB (floating action button)
+# ---------------------------------------------------------------------------
+_HAS_API_KEY = False
+try:
+    _api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+    if _api_key:
+        _HAS_API_KEY = True
+except Exception:
+    _api_key = ""
+
+
+def _render_ai_fab():
+    """Render a fixed-position FAB that opens the AI chat popover."""
+    st.markdown("""
+    <style>
+    /* ── AI FAB: fix the popover's layout wrapper to bottom-right ── */
+    /* The stLayoutWrapper parent must be fixed so its child popover
+       leaves normal document flow entirely. */
+    div[data-testid="stVerticalBlock"] > div[data-testid="stLayoutWrapper"]:has(> div[data-testid="stPopover"]) {
+        position: fixed !important;
+        bottom: 24px !important;
+        right: 24px !important;
+        z-index: 999 !important;
+        width: auto !important;
+        height: auto !important;
+    }
+    /* Circular button — filled navy, white icon, no caret */
+    div[data-testid="stPopover"] button[data-testid="stPopoverButton"] {
+        width: 56px !important;
+        height: 56px !important;
+        border-radius: 50% !important;
+        background: #163A63 !important;
+        color: #fff !important;
+        border: none !important;
+        font-size: 24px !important;
+        padding: 0 !important;
+        min-height: 0 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        box-shadow: 0 4px 14px rgba(22, 58, 99, 0.35) !important;
+        cursor: pointer !important;
+    }
+    div[data-testid="stPopover"] button[data-testid="stPopoverButton"]:hover {
+        background: #1e4d7a !important;
+        box-shadow: 0 6px 20px rgba(22, 58, 99, 0.5) !important;
+    }
+    /* Hide the dropdown caret icon inside the popover button */
+    div[data-testid="stPopover"] button[data-testid="stPopoverButton"] span[data-testid="stIconMaterial"] {
+        display: none !important;
+    }
+    /* Hide the tooltip wrapper's flex layout that adds spacing */
+    div[data-testid="stPopover"] span[data-testid="stTooltipHoverTarget"] {
+        display: contents !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    with st.popover("✦", use_container_width=False, help="Chat with AI assistant"):
+        st.markdown(
+            '<p style="font-weight: 600; font-size: 15px; color: #1E293B; margin-bottom: 8px;">'
+            '🤖 AI Assistant</p>',
+            unsafe_allow_html=True,
+        )
+        if not _HAS_API_KEY:
+            st.caption(
+                "Add `ANTHROPIC_API_KEY` in Streamlit Secrets to enable. "
+                "Uses Claude Haiku for what-if questions about your model."
+            )
+        else:
+            import anthropic
+
+            if "ai_messages" not in st.session_state:
+                st.session_state.ai_messages = []
+
+            def _build_system_prompt() -> str:
+                snap = _snapshot()
+                lines = ["You are a concise SaaS revenue modeling assistant embedded in a B2B revenue architecture dashboard.",
+                         "The model is deterministic — capacity-constrained pipeline × win rates × contract terms → bookings → ratable revenue recognition → renewals/NRR.",
+                         "Answer what-if questions about the user's current assumptions and outputs. Be specific, reference numbers, and keep answers under 150 words.",
+                         "", "CURRENT ASSUMPTIONS:"]
+                for k, v in sorted(snap.items()):
+                    lines.append(f"  {k}: {v}")
+                return "\n".join(lines)
+
+            if not st.session_state.ai_messages:
+                st.caption("Ask what-if questions about your revenue model.")
+
+            for msg in st.session_state.ai_messages:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+
+            if prompt := st.chat_input("Ask about your model…", key="ai_chat_input"):
+                st.session_state.ai_messages.append({"role": "user", "content": prompt})
+
+                client = anthropic.Anthropic(api_key=_api_key)
+                api_messages = [{"role": m["role"], "content": m["content"]} for m in st.session_state.ai_messages]
+
+                try:
+                    with st.spinner("Thinking…"):
+                        response = client.messages.create(
+                            model="claude-haiku-4-5-20251001",
+                            max_tokens=512,
+                            system=_build_system_prompt(),
+                            messages=api_messages,
+                        )
+                    assistant_text = response.content[0].text
+                except Exception as e:
+                    assistant_text = f"⚠️ API error: {e}"
+
+                st.session_state.ai_messages.append({"role": "assistant", "content": assistant_text})
+                st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Header — title + state buttons + Export
+# ---------------------------------------------------------------------------
+_hdr_left, _hdr_right = st.columns([4, 1], vertical_alignment="bottom")
+with _hdr_left:
     st.markdown(
-        '<h1 class="main-title" style="border-bottom: 2px solid #E2E8F0; padding-bottom: 12px; margin-bottom: 12px;">'
-        'Revenue Architecture — Pipeline, Recognition & Renewal Model'
-        '</h1>', 
-        unsafe_allow_html=True
+        '<div class="header-block">'
+        '<h1 class="main-title">Revenue Architecture Model</h1>'
+        '<p class="tagline">Pipeline, recognition & renewal model for B2B SaaS. '
+        'Adjust segment assumptions in the sidebar.</p>'
+        '</div>',
+        unsafe_allow_html=True,
     )
-    # Clean explanatory text directly under the heading and line
-    st.markdown(
-        '<p style="color: #64748B; font-size: 14px; line-height: 1.5; margin-bottom: 20px;">'
-        'Model how GTM capacity, pipeline, implementation timing and customer retention translate into ARR and recognized revenue. '
-        'Start by selecting a segment and adjusting the assumptions below.'
-        '</p>',
-        unsafe_allow_html=True
-    )
-
-# 1. Split the right side into 3 mini-columns for the buttons
-btn_undo, btn_reset, btn_export = header_actions.columns([1, 1, 1.5], vertical_alignment="center")
-
-# 2. Render Undo and Reset immediately
-with btn_undo:
-    has_snapshot = bool(st.session_state.get("_last_reset_snapshot"))
-    if st.button("↩ Undo Reset", type="tertiary", use_container_width=True, disabled=not has_snapshot):
-        snapshot = st.session_state.pop("_last_reset_snapshot", {})
-        for k, v in snapshot.items():
-            st.session_state[k] = v
-        st.rerun()
-
-with btn_reset:
-    if st.button("↺ Reset All", type="secondary", use_container_width=True):
-        st.session_state["_last_reset_snapshot"] = {
-            k: v for k, v in st.session_state.items() if _is_resettable_key(k)
-        }
-        for k in list(st.session_state.keys()):
-            if _is_resettable_key(k):
-                del st.session_state[k]
-        st.rerun()
-
-# 3. Create a placeholder ONLY for the Export button
-export_container = btn_export.container()
+with _hdr_right:
+    _b1, _b2, _b3 = st.columns(3, vertical_alignment="center")
+    with _b1:
+        if st.button("📌", key="sm_btn_default", type="tertiary",
+                      help="Set current assumptions as default"):
+            st.session_state["sm_default"] = _snapshot()
+            st.toast("Current assumptions saved as default.")
+    with _b2:
+        has_history = bool(st.session_state.get("sm_history"))
+        if st.button("↩", key="sm_btn_undo", type="tertiary",
+                      disabled=not has_history, help="Undo last change"):
+            history = st.session_state["sm_history"]
+            if history:
+                prev = history.pop()
+                st.session_state["sm_skip_push"] = True
+                _restore(prev)
+                st.rerun()
+    with _b3:
+        has_default = st.session_state.get("sm_default") is not None
+        reset_help = "Reset to saved default" if has_default else "Reset all assumptions"
+        if st.button("⟲", key="sm_btn_reset", type="tertiary", help=reset_help):
+            st.session_state["sm_skip_push"] = True
+            if has_default:
+                _restore(st.session_state["sm_default"])
+            else:
+                for k in list(st.session_state.keys()):
+                    if _is_resettable_key(k):
+                        del st.session_state[k]
+            st.session_state["sm_history"] = []
+            st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -431,10 +618,7 @@ def render_inputs(key: str, label: str, num_months_default: int = 24, show_gross
         gross_margin_pct = None
         num_months = num_months_default
     else:
-        # Same 8-column grid as the "Team & Quota" row below, so the Segment /
-        # Horizon / Gross margin boxes line up at the same width instead of
-        # stretching across 1/2 or 1/3 of the page.
-        top1, top2, top3, *_ = st.columns(8)
+        top1, top2, top3 = st.columns(3)
         if show_gross_margin:
             gross_margin_pct = top3.number_input("Gross margin %", 0.0, 1.0, 0.75, step=0.01, key=f"{key}_gm",
                                                   help="Used for LTV. Blended gross margin on subscription revenue. Used only in the LTV formula: LTV = ARPA × Gross Margin ÷ Annual Churn Rate.")
@@ -474,48 +658,54 @@ def render_inputs(key: str, label: str, num_months_default: int = 24, show_gross
     # the collapsed "Advanced" section below, the same way a real model
     # keeps headcount/comp detail on its own separate sheet. ---
     st.caption("Team & Quota")
-    c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(8)
-    num_existing_aes = c1.number_input("Existing AEs", 0, 100, 0, key=f"{key}_existing_aes",
+    tq1, tq2 = st.columns(2)
+    num_existing_aes = tq1.number_input("Existing AEs", 0, 100, 0, key=f"{key}_existing_aes",
                                         help="Already on the team — fully productive from month 1, no ramp-up period.")
-    num_aes = c2.number_input("New AEs", 0, 50, 3, key=f"{key}_num_aes",
+    num_aes = tq2.number_input("New AEs", 0, 50, 3, key=f"{key}_num_aes",
                                help="New hires — ramp up over 3 months (33%/66%/100% of full quota-carrying capacity), phased in per the hiring cadence set in Advanced.")
-    num_existing_bdrs = c3.number_input("Existing BDRs", 0, 100, 0, key=f"{key}_existing_bdrs",
+    tq3, tq4 = st.columns(2)
+    num_existing_bdrs = tq3.number_input("Existing BDRs", 0, 100, 0, key=f"{key}_existing_bdrs",
                                          help="Already on the team — fully productive from month 1.")
-    num_bdrs = c4.number_input("New BDRs", 0, 50, 2, key=f"{key}_num_bdrs",
+    num_bdrs = tq4.number_input("New BDRs", 0, 50, 2, key=f"{key}_num_bdrs",
                                 help="New hires — same 3-month ramp as new AEs.")
-    ae_quota_millions = c5.number_input("AE quota ($M)", 0.0, 10.0, 1.1, step=0.1, key=f"{key}_ae_quota_m",
+    tq5, tq6 = st.columns(2)
+    ae_quota_millions = tq5.number_input("AE quota ($M)", 0.0, 10.0, 1.1, step=0.1, key=f"{key}_ae_quota_m",
                                          help="Annual bookings quota per fully-ramped AE, in TCV (Total Contract Value) — the same unit as Avg Deal Size, not ARR. Only equals an ARR quota when the contract term is 12 months. Sets the hard capacity ceiling on how much this team can close, and drives the default comp split in Advanced (5.5x quota:OTE).")
-    bdr_sql = c6.number_input("BDR SQLs/mo", 0, 50, 6, key=f"{key}_bdr_sql",
+    bdr_sql = tq6.number_input("BDR SQLs/mo", 0, 50, 6, key=f"{key}_bdr_sql",
                                help="SQLs (sales-qualified leads) each fully-ramped BDR produces per month, feeding the AE pipeline.")
-    marketing_sqls = c7.number_input("Mktg SQLs/mo", 0.0, 500.0, 12.0, key=f"{key}_marketing_sqls",
+    tq7, tq8 = st.columns(2)
+    marketing_sqls = tq7.number_input("Mktg SQLs/mo", 0.0, 500.0, 12.0, key=f"{key}_marketing_sqls",
                                       help="Marketing/inbound-sourced SQLs per month — a flat number, not a lead→MQL→SQL funnel. Channel mix (content, paid, partnerships) is too company-specific to model generically; see README.")
-    ae_self_sourced = c8.number_input("AE self-src/mo", 0.0, 20.0, 2.0, step=1.0, key=f"{key}_selfsrc",
+    ae_self_sourced = tq8.number_input("AE self-src/mo", 0.0, 20.0, 2.0, step=1.0, key=f"{key}_selfsrc",
                                        help="SQLs each AE generates on their own (existing network, outbound), on top of what BDRs and marketing feed them.")
 
     st.caption("Deal Economics & Win Rates")
-    e1, e2, e3, e4 = st.columns(4)
-    avg_deal_size = e1.number_input("Avg deal size — TCV ($)", 0, 5_000_000, 18_000, step=1000, key=f"{key}_deal",
+    de1, de2 = st.columns(2)
+    avg_deal_size = de1.number_input("Avg deal size — TCV ($)", 0, 5_000_000, 18_000, step=1000, key=f"{key}_deal",
                                      help="Average Total Contract Value per deal — the full value over the entire contract term, not annualized. Used to convert monthly bookings $ into individual synthetic contracts.")
-    win_marketing = e2.slider("Win rate — marketing", 0.0, 1.0, 0.25, key=f"{key}_wm",
+    win_marketing = de2.slider("Win % — marketing", 0.0, 1.0, 0.25, key=f"{key}_wm",
                                help="% of marketing-sourced SQLs that close as won deals.")
-    win_bdr = e3.slider("Win rate — BDR", 0.0, 1.0, 0.20, key=f"{key}_wb",
+    de3, de4 = st.columns(2)
+    win_bdr = de3.slider("Win % — BDR", 0.0, 1.0, 0.20, key=f"{key}_wb",
                          help="% of BDR-sourced SQLs that close as won deals. Typically lower than marketing/self-sourced — colder outbound leads.")
-    win_self = e4.slider("Win rate — self-sourced", 0.0, 1.0, 0.35, key=f"{key}_ws",
+    win_self = de4.slider("Win % — self-sourced", 0.0, 1.0, 0.35, key=f"{key}_ws",
                           help="% of AE-self-sourced SQLs that close as won deals. Typically the highest — warmest, highest-intent source.")
 
     st.caption("Contract & Renewal")
-    f1, f2, f3, f4, f5, f6 = st.columns(6)
-    contract_term = f1.number_input("Term (mo)", 1, 60, 12, key=f"{key}_term",
+    cr1, cr2 = st.columns(2)
+    contract_term = cr1.number_input("Term (mo)", 1, 60, 12, key=f"{key}_term",
                                      help="Subscription contract length. Revenue is recognized ratably (evenly) over this period, starting at go-live.")
-    implementation_lag = f2.number_input("Impl. lag (mo)", 0, 24, 2, key=f"{key}_lag",
+    implementation_lag = cr2.number_input("Impl. lag (mo)", 0, 24, 2, key=f"{key}_lag",
                                           help="Months between signing and go-live. Revenue recognition can't start until go-live, even though the deal is already booked — this is the gap that breaks naive 'bookings = revenue' models.")
-    churn_rate = f3.number_input("Churn %", 0.0, 1.0, 0.12, step=0.01, key=f"{key}_churn",
+    cr3, cr4 = st.columns(2)
+    churn_rate = cr3.number_input("Churn %", 0.0, 1.0, 0.12, step=0.01, key=f"{key}_churn",
                                   help="Annual gross revenue churn rate — % of ARR lost at renewal from customers who don't renew at all.")
-    expansion_rate = f4.number_input("Expansion %", 0.0, 1.0, 0.18, step=0.01, key=f"{key}_exp",
+    expansion_rate = cr4.number_input("Expansion %", 0.0, 1.0, 0.18, step=0.01, key=f"{key}_exp",
                                       help="Annual expansion rate — % ARR gained from upsell/cross-sell among renewing accounts (applied after churn, to the retained base).")
-    contraction_rate = f5.number_input("Contraction %", 0.0, 1.0, 0.03, step=0.01, key=f"{key}_contr",
+    cr5, cr6 = st.columns(2)
+    contraction_rate = cr5.number_input("Contraction %", 0.0, 1.0, 0.03, step=0.01, key=f"{key}_contr",
                                         help="Annual contraction rate — % ARR lost from downgrades among renewing accounts (distinct from full churn — the account stays, just pays less).")
-    execution_efficiency = f6.number_input("Exec. efficiency", 0.0, 1.5, 1.0, step=0.01, key=f"{key}_exec",
+    execution_efficiency = cr6.number_input("Exec. efficiency", 0.0, 1.5, 1.0, step=0.01, key=f"{key}_exec",
                                             help="Real-world execution quality, independent of funnel/capacity math — deal slippage, discounting, a rep having a bad quarter. 1.0 = perfect execution. Still capped by capacity even above 1.0.")
 
     # --- Advanced: comp breakdown, hiring cadence, custom schedules,
@@ -574,12 +764,15 @@ def render_inputs(key: str, label: str, num_months_default: int = 24, show_gross
         seasonality_pattern = None
         if use_seasonality:
             months_labels = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
-            season_cols = st.columns(6)
-            seasonality_pattern = [
-                season_cols[i % 6].slider(months_labels[i], 0.0, 2.0, 1.0, key=f"{key}_season_{i}",
-                                           help=f"Bookings multiplier for {months_labels[i]}. 1.0 = normal, 0.5 = half, 1.5 = 50% above normal.")
-                for i in range(12)
-            ]
+            seasonality_pattern = []
+            for row_start in range(0, 12, 3):
+                scols = st.columns(3)
+                for j in range(3):
+                    i = row_start + j
+                    seasonality_pattern.append(
+                        scols[j].slider(months_labels[i], 0.0, 2.0, 1.0, key=f"{key}_season_{i}",
+                                        help=f"Bookings multiplier for {months_labels[i]}. 1.0 = normal, 0.5 = half, 1.5 = 50% above normal.")
+                    )
 
     return dict(
         pod_name=pod_name, num_aes=num_aes, num_bdrs=num_bdrs, hiring_cadence=hiring_cadence,
@@ -784,36 +977,52 @@ def combine_renewals_for_display(renewals_df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# MODE SELECTOR
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# MODE SELECTOR & GLOBAL INPUTS
+# SIDEBAR — Mode, Navigation, Settings & Assumptions
 # ---------------------------------------------------------------------------
 if "app_mode" not in st.session_state:
     st.session_state.app_mode = "Full Company (All Segments)"
 
-st.write("") # Spacing
-ctrl_col1, ctrl_col2, ctrl_space, ctrl_col3, ctrl_col4 = st.columns([1.5, 1.6, 2, 1.2, 1.2], vertical_alignment="bottom")
+with st.sidebar:
+    _export_container = st.container()
 
-with ctrl_col1:
-    st.caption("Mode")
-    if st.button("📊 All Segments", use_container_width=True, type="primary" if st.session_state.app_mode == "Full Company (All Segments)" else "secondary"):
+    _step = st.session_state.sidebar_width_step
+    _sw_narrower, _sw_wider = st.columns(2)
+    with _sw_narrower:
+        if st.button("−", use_container_width=True, type="tertiary",
+                      disabled=(_step == 0), key="sw_narrower",
+                      help=f"Narrower ({_SIDEBAR_LABELS[max(_step - 1, 0)]})"):
+            st.session_state.sidebar_width_step = _step - 1
+            st.rerun()
+    with _sw_wider:
+        if st.button("+", use_container_width=True, type="tertiary",
+                      disabled=(_step == len(_SIDEBAR_WIDTHS) - 1), key="sw_wider",
+                      help=f"Wider ({_SIDEBAR_LABELS[min(_step + 1, len(_SIDEBAR_WIDTHS) - 1)]})"):
+            st.session_state.sidebar_width_step = _step + 1
+            st.rerun()
+
+    st.markdown(
+        '<p style="font-weight: 700; font-size: 15px; margin-bottom: 4px;">Mode</p>',
+        unsafe_allow_html=True,
+    )
+    mode_selection = st.segmented_control(
+        "mode_selector", ["All Segments", "Compare Scenarios"],
+        default="All Segments" if st.session_state.app_mode == "Full Company (All Segments)" else "Compare Scenarios",
+        label_visibility="collapsed",
+    )
+    if mode_selection == "All Segments":
         st.session_state.app_mode = "Full Company (All Segments)"
-        st.rerun()
-
-with ctrl_col2:
-    st.caption("&nbsp;") # Invisible caption to align button with the one above
-    if st.button("⚖️ Compare Scenarios", use_container_width=True, type="primary" if st.session_state.app_mode == "Compare Two Scenarios" else "secondary"):
+    elif mode_selection == "Compare Scenarios":
         st.session_state.app_mode = "Compare Two Scenarios"
-        st.rerun()
 
-with ctrl_col3:
-    global_horizon = st.number_input("Forecast Horizon (Months)", 6, 48, 24, key="global_horizon")
+    st.divider()
 
-with ctrl_col4:
-    global_margin = st.number_input("Gross Margin % for LTV", 0.0, 1.0, 0.75, step=0.01, key="global_margin")
+    sc1, sc2 = st.columns(2)
+    with sc1:
+        global_horizon = st.number_input("Forecast Horizon", 6, 48, 24, key="global_horizon")
+    with sc2:
+        global_margin = st.number_input("Gross Margin %", 0.0, 1.0, 0.75, step=0.01, key="global_margin")
 
-st.write("") # Spacing
+    st.divider()
 
 # ===========================================================================
 # FULL COMPANY MODE
@@ -825,110 +1034,84 @@ if st.session_state.app_mode == "Full Company (All Segments)":
     num_months = global_horizon
     gross_margin_pct = global_margin
 
-   
-
-    # st.expander explicitly discourages nesting expanders inside each other,
-    # so the outer "Segments & Assumptions" grouping is a bordered container
-    # (which nests fine), not an expander — the 4 individual market boxes
-    # below stay as real (collapsible) expanders.
     cfgs = {}
-    with st.container(border=True):
-        st.markdown("""
-            <div style="background-color: #163A63; color: #FFFFFF; padding: 14px 20px; font-weight: 600; font-size: 16px; margin: -17px -17px 12px -17px; border-top-left-radius: 11px; border-top-right-radius: 11px;">
-                Segments & Assumptions
-            </div>
-        """, unsafe_allow_html=True)
+    with st.sidebar:
+        st.markdown(
+            '<p style="font-weight: 700; font-size: 15px; margin-bottom: 4px;">Segment Assumptions</p>',
+            unsafe_allow_html=True,
+        )
         for market in MARKET_NAMES:
             with st.expander(market, expanded=False):
                 cfg_m = render_inputs(MARKET_KEYS[market], market, num_months_default=num_months,
                                        fixed_segment=market, show_horizon=False)
                 att = attainment_summary(cfg_m, num_months)
                 if att["avg_attainment_pct"] is not None:
-                    st.info(
-                        f"<h4 style='color: #2563EB; font-size: 15px; margin-bottom: 6px; margin-top: 0px;'>📊 AE Quota Attainment: {att['avg_attainment_pct']:.1f}%</h4>"
-                        f"Capacity-bound in {att['months_capacity_bound']}/{att['total_months']} months.\n\n"
-                        + ("AEs are fully utilized — headcount/quota, not pipeline, is the limiting factor here. "
-                           if att["months_capacity_bound"] == att["total_months"]
-                           else "AEs have slack capacity in some months — more pipeline can still convert to bookings."),
-                        icon="ℹ️"
+                    st.caption(
+                        f"📊 AE Attainment: {att['avg_attainment_pct']:.1f}% — "
+                        f"Cap-bound {att['months_capacity_bound']}/{att['total_months']} months."
                     )
             cfgs[market] = cfg_m
 
-    # -----------------------------------------------------------------
-    # EXISTING CUSTOMER BOOK (optional) — top-line ARR/revenue overlay,
-    # NOT run through the Contract engine (no individual contract dates
-    # available from a revenue extract). Runs alongside new business.
-    # Lives in the main area, not a sidebar — nothing in this app should
-    # sit in a separate vertical pane the assumptions grid doesn't.
-    # -----------------------------------------------------------------
+        st.divider()
+
+        include_existing = st.checkbox("Historical customer data", value=False, key="fc_include_existing",
+                                        help="Upload customer-level monthly revenue to derive historical NRR, churn and expansion.")
+
     existing_book_df = None
     derived_metrics = None
     historical_annual = None
 
-    include_existing = st.checkbox("Use historical customer data to ground the forecast", value=False,
-                                    help="Upload customer-level monthly revenue to derive historical NRR, churn and expansion and project the existing customer base alongside new business.")
-
     if include_existing:
-        with st.expander("Existing Customer Book", expanded=True):
-            uploaded = st.file_uploader("Upload customer revenue extract (CSV or Excel)", type=["csv", "xlsx"],
-                                         help="Long format: one row per customer per month. Used to derive real trailing-12-month NRR/churn directly from your data, instead of guessing a rate.")
-            st.caption("Long format expected: one row per customer per month (customer, month, revenue). "
-                       "At least 13 months of history needed to derive a trailing-12-month comparison.")
-
-            if uploaded is not None:
-                try:
-                    raw_df = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
-                except Exception as e:
-                    st.error(f"Couldn't read file: {e}")
-                    raw_df = None
-
-                if raw_df is not None:
-                    st.caption("Map your columns:")
-                    cols = list(raw_df.columns)
-                    mc1, mc2, mc3, mc4 = st.columns(4)
-                    customer_col = mc1.selectbox("Customer column", cols, index=0,
-                                                  help="Which column identifies each customer (name or ID).")
-                    month_col = mc2.selectbox("Month column", cols, index=min(1, len(cols) - 1),
-                                               help="Which column has the month/date for each revenue row.")
-                    revenue_col = mc3.selectbox("Revenue column", cols, index=min(2, len(cols) - 1),
-                                                 help="Which column has the recognized revenue amount for that customer-month.")
-                    lookback = mc4.number_input("Lookback (months)", 1, 24, 12,
-                                                 help="How far back to compare for the churn/expansion/NRR calculation — 12 months is the standard trailing-twelve-month convention.")
-
+        with st.sidebar:
+            with st.expander("Existing Customer Book", expanded=True):
+                uploaded = st.file_uploader("Upload revenue extract", type=["csv", "xlsx"],
+                                             help="Long format: one row per customer per month.")
+                if uploaded is not None:
                     try:
-                        matrix = load_customer_revenue_extract(raw_df, customer_col, month_col, revenue_col)
-                        derived_metrics = derive_book_metrics(matrix, lookback_months=lookback)
+                        raw_df = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
                     except Exception as e:
-                        st.error(f"Couldn't derive metrics: {e}")
-                        derived_metrics = None
+                        st.error(f"Couldn't read file: {e}")
+                        raw_df = None
 
-                    if derived_metrics is not None:
-                        st.success(
-                            f"Derived NRR: {derived_metrics.nrr_pct}% "
-                            f"({derived_metrics.customers_matched} matched, {derived_metrics.customers_churned} churned)"
-                        )
-                        historical_annual = derive_annual_history(matrix).rename(columns={"new_arr_booked": "new_arr_live"})
+                    if raw_df is not None:
+                        cols = list(raw_df.columns)
+                        customer_col = st.selectbox("Customer column", cols, index=0)
+                        month_col = st.selectbox("Month column", cols, index=min(1, len(cols) - 1))
+                        revenue_col = st.selectbox("Revenue column", cols, index=min(2, len(cols) - 1))
+                        lookback = st.number_input("Lookback (months)", 1, 24, 12)
 
-                        override = st.checkbox("Override derived rates manually", value=False,
-                                                help="The derived rates above come straight from your data — this lets you adjust them (e.g. if you know a one-off event skewed the numbers).")
-                        if override:
-                            oc1, oc2, oc3 = st.columns(3)
-                            eb_churn = oc1.slider("Existing book — annual churn", 0.0, 1.0, derived_metrics.implied_annual_churn_rate or 0.10)
-                            eb_expansion = oc2.slider("Existing book — annual expansion", 0.0, 1.0, derived_metrics.implied_annual_expansion_rate or 0.10)
-                            eb_contraction = oc3.slider("Existing book — annual contraction", 0.0, 1.0, derived_metrics.implied_annual_contraction_rate or 0.02)
-                        else:
-                            eb_churn = derived_metrics.implied_annual_churn_rate or 0.0
-                            eb_expansion = derived_metrics.implied_annual_expansion_rate or 0.0
-                            eb_contraction = derived_metrics.implied_annual_contraction_rate or 0.0
+                        try:
+                            matrix = load_customer_revenue_extract(raw_df, customer_col, month_col, revenue_col)
+                            derived_metrics = derive_book_metrics(matrix, lookback_months=lookback)
+                        except Exception as e:
+                            st.error(f"Couldn't derive metrics: {e}")
+                            derived_metrics = None
 
-                        existing_book_df = project_existing_book_runoff(
-                            base_arr=derived_metrics.base_arr,
-                            annual_churn_rate=eb_churn,
-                            annual_expansion_rate=eb_expansion,
-                            annual_contraction_rate=eb_contraction,
-                            num_months=num_months,
-                            base_logo_count=derived_metrics.base_logo_count,
-                        )
+                        if derived_metrics is not None:
+                            st.success(
+                                f"NRR: {derived_metrics.nrr_pct}% "
+                                f"({derived_metrics.customers_matched} matched, {derived_metrics.customers_churned} churned)"
+                            )
+                            historical_annual = derive_annual_history(matrix).rename(columns={"new_arr_booked": "new_arr_live"})
+
+                            override = st.checkbox("Override rates manually", value=False)
+                            if override:
+                                eb_churn = st.slider("Annual churn", 0.0, 1.0, derived_metrics.implied_annual_churn_rate or 0.10)
+                                eb_expansion = st.slider("Annual expansion", 0.0, 1.0, derived_metrics.implied_annual_expansion_rate or 0.10)
+                                eb_contraction = st.slider("Annual contraction", 0.0, 1.0, derived_metrics.implied_annual_contraction_rate or 0.02)
+                            else:
+                                eb_churn = derived_metrics.implied_annual_churn_rate or 0.0
+                                eb_expansion = derived_metrics.implied_annual_expansion_rate or 0.0
+                                eb_contraction = derived_metrics.implied_annual_contraction_rate or 0.0
+
+                            existing_book_df = project_existing_book_runoff(
+                                base_arr=derived_metrics.base_arr,
+                                annual_churn_rate=eb_churn,
+                                annual_expansion_rate=eb_expansion,
+                                annual_contraction_rate=eb_contraction,
+                                num_months=num_months,
+                                base_logo_count=derived_metrics.base_logo_count,
+                            )
 
     try:
         results = {m: run_full_model(cfgs[m], num_months) for m in MARKET_NAMES}
@@ -936,10 +1119,11 @@ if st.session_state.app_mode == "Full Company (All Segments)":
         st.error(f"Model error: {e}")
         st.stop()
 
-    selected_markets = st.multiselect(
-        "Markets to include", MARKET_NAMES, default=MARKET_NAMES, key="fc_market_filter",
-        help="Governs the Executive Dashboard and every tab below — charts/metrics show the sum across whichever markets are selected here, and raw data tables break out each selected market separately underneath the combined view.",
-    )
+    with st.sidebar:
+        st.divider()
+        selected_markets = st.multiselect(
+            "Markets to include", MARKET_NAMES, default=MARKET_NAMES, key="fc_market_filter",
+        )
     if not selected_markets:
         st.warning("Select at least one market above to see results.")
         st.stop()
@@ -952,16 +1136,39 @@ if st.session_state.app_mode == "Full Company (All Segments)":
     eb_base_arr = derived_metrics.base_arr if derived_metrics is not None else 0.0
     eb_base_logos = derived_metrics.base_logo_count if derived_metrics is not None else 0
 
-    tab_names = ["📐 Executive Dashboard", "📈 Pipeline & Capacity", "💰 Revenue Recognition", "🔄 Renewals & NRR"]
+    fc_pages = ["📐 Executive Dashboard", "📈 Pipeline & Capacity", "💰 Revenue Recognition", "🔄 Renewals & NRR"]
     if existing_book_df is not None:
-        tab_names.insert(1, "🏢 Total Company")
-    tabs = st.tabs(tab_names)
-    tab_offset = 1  # SaaS Metrics Dashboard is always tab 0 now
-    if existing_book_df is not None:
-        tab_offset = 2
+        fc_pages.insert(1, "🏢 Total Company")
 
-    with tabs[0]:
-        st.caption("ARR, revenue, retention and key forecast drivers.")
+    with _export_container:
+        try:
+            cfg_list = [cfgs[m] for m in selected_markets]
+            xlsx_bytes = generate_multi_pod_workbook_bytes(cfg_list, num_months)
+            st.download_button(
+                label="📥 Export Excel",
+                data=xlsx_bytes,
+                file_name="company_financial_model.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                use_container_width=True,
+                help=f"Download an auditable Excel model covering: {', '.join(selected_markets)}.",
+            )
+        except Exception:
+            st.caption("Configure segments to export")
+
+    fc_tab_labels = [pg.split(" ", 1)[1] for pg in fc_pages]
+    selected_tab = st.segmented_control(
+        "fc_nav", fc_tab_labels,
+        default=fc_tab_labels[0],
+        key="fc_page_seg",
+        label_visibility="collapsed",
+    )
+    if selected_tab is None:
+        selected_tab = fc_tab_labels[0]
+    selected_page = fc_pages[fc_tab_labels.index(selected_tab)]
+
+    if selected_page == "📐 Executive Dashboard":
+        st.markdown('<p class="dashboard-caption">ARR, revenue, retention and key forecast drivers.</p>', unsafe_allow_html=True)
         annual = aggregate_periods(
             phase2_df, renewals_df, existing_book_df, all_contracts, num_months,
             period_months=12, gross_margin_pct=gross_margin_pct,
@@ -1002,27 +1209,15 @@ if st.session_state.app_mode == "Full Company (All Segments)":
                 return None
             return latest[field] - prior[field]
 
-        st.subheader(f"Full Company — {latest['period']}")
-        st.caption(f"Markets included: {', '.join(selected_markets)}.")
+        st.markdown(
+            f'<h3 class="dashboard-heading" style="font-size: 20px; font-weight: 700; color: #1E293B;">'
+            f'Full Company — {latest["period"]}</h3>'
+            f'<p class="dashboard-caption" style="margin-bottom: 8px;">Markets included: {", ".join(selected_markets)}.</p>',
+            unsafe_allow_html=True,
+        )
         if historical_annual is not None and len(historical_annual) > 0:
             st.caption(f"Showing {len(historical_annual)} year(s) of actuals from your extract, "
                        f"continuing into {len(annual)} year(s) of forecast.")
-
-        with export_container:
-            try:
-                cfg_list = [cfgs[m] for m in selected_markets]
-                xlsx_bytes = generate_multi_pod_workbook_bytes(cfg_list, num_months)
-                st.download_button(
-                    label="📥 Export Auditable Excel Model",
-                    data=xlsx_bytes,
-                    file_name="company_financial_model.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    type="primary",
-                    use_container_width=True,
-                    help=f"Download an auditable Excel model covering: {', '.join(selected_markets)}."
-                )
-            except Exception as e:
-                st.caption("Configure segments to export")
 
         # Hero tiles: primary audience is FP&A/CFO, not investors — accounting-
         # operational metrics (Recognized Revenue, Deferred Revenue) take
@@ -1072,8 +1267,6 @@ if st.session_state.app_mode == "Full Company (All Segments)":
             r, g, b = int(hex_str[0:2], 16), int(hex_str[2:4], 16), int(hex_str[4:6], 16)
             return f"rgba({r}, {g}, {b}, {alpha})"
 
-        cols = st.columns(6)
-        
         metrics_data = [
             ("Ending ARR", _fmt_millions(latest['ending_arr']), arr_delta_str, phase2_df["live_arr"], "#16A34A"),       # Green
             ("Recognized Rev", _fmt_millions(latest['revenue']), rev_delta_str, phase2_df["total_revenue_recognized"], "#2563EB"), # Blue
@@ -1083,8 +1276,12 @@ if st.session_state.app_mode == "Full Company (All Segments)":
             ("Capacity Cost", _fmt_millions(phase1_df['total_cost_of_capacity'].sum()), None, phase1_df["total_cost_of_capacity"], "#DC2626") # Red/Coral
         ]
 
+        row1_cols = st.columns(3)
+        row2_cols = st.columns(3)
+        all_cols = row1_cols + row2_cols
+
         for i, (label, val, delta, chart_vals, val_color) in enumerate(metrics_data):
-            with cols[i]:
+            with all_cols[i]:
                 with st.container(border=True):
                     mc_left, mc_right = st.columns([1.1, 1.3], vertical_alignment="center")
                     with mc_left:
@@ -1213,7 +1410,7 @@ if st.session_state.app_mode == "Full Company (All Segments)":
                 forecast_rows = chart_annual[chart_annual["type"] == "Forecast"]
                 if len(actual_rows) > 0:
                     arr_fig.add_trace(go.Bar(x=actual_rows["period"], y=actual_rows["ending_arr"],
-                                              name="Actual", marker_color="#163A63"))
+                                              name="Actual", marker_color="#2563EB"))
                 if len(forecast_rows) > 0:
                     arr_fig.add_trace(go.Bar(x=forecast_rows["period"], y=forecast_rows["ending_arr"],
                                               name="Forecast", marker_color="#93C5FD"))
@@ -1325,41 +1522,40 @@ if st.session_state.app_mode == "Full Company (All Segments)":
                     st.markdown(f"*Year {y+1}*")
                     st.dataframe(_bold_headers(style_wide(year_quarters.set_index("period").T)), width='stretch')
 
-    if existing_book_df is not None:
-        with tabs[1]:
-            combined = pd.DataFrame({
-                "month": phase2_df["month"],
-                "existing_book_arr": existing_book_df["existing_book_arr"],
-                "new_business_live_arr": phase2_df["live_arr"],
-            })
-            combined["total_arr"] = combined["existing_book_arr"] + combined["new_business_live_arr"]
+    elif existing_book_df is not None and selected_page == "🏢 Total Company":
+        combined = pd.DataFrame({
+            "month": phase2_df["month"],
+            "existing_book_arr": existing_book_df["existing_book_arr"],
+            "new_business_live_arr": phase2_df["live_arr"],
+        })
+        combined["total_arr"] = combined["existing_book_arr"] + combined["new_business_live_arr"]
 
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Existing Book — Ending ARR", f"${existing_book_df['existing_book_arr'].iloc[-1]:,.0f}")
-            c2.metric("New Business — Ending Live ARR", f"${phase2_df['live_arr'].iloc[-1]:,.0f}")
-            c3.metric("Total Company — Ending ARR", f"${combined['total_arr'].iloc[-1]:,.0f}")
-            st.line_chart(combined.set_index("month")[["existing_book_arr", "new_business_live_arr", "total_arr"]].rename(
-                columns={"existing_book_arr": "Existing Book ARR", "new_business_live_arr": "New Business ARR (Live)", "total_arr": "Total ARR"}
-            ))
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Existing Book — Ending ARR", f"${existing_book_df['existing_book_arr'].iloc[-1]:,.0f}")
+        c2.metric("New Business — Ending Live ARR", f"${phase2_df['live_arr'].iloc[-1]:,.0f}")
+        c3.metric("Total Company — Ending ARR", f"${combined['total_arr'].iloc[-1]:,.0f}")
+        st.line_chart(combined.set_index("month")[["existing_book_arr", "new_business_live_arr", "total_arr"]].rename(
+            columns={"existing_book_arr": "Existing Book ARR", "new_business_live_arr": "New Business ARR (Live)", "total_arr": "Total ARR"}
+        ))
 
-            d1, d2, d3, d4 = st.columns(4)
-            d1.metric("Extract — Base ARR", f"${derived_metrics.base_arr:,.0f}")
-            d2.metric("Extract — Trailing-12 NRR", f"{derived_metrics.nrr_pct}%")
-            d3.metric("Extract — Churned ARR (TTM)", f"${derived_metrics.churned_arr:,.0f}")
-            d4.metric("Extract — Expansion ARR (TTM)", f"${derived_metrics.expansion_arr:,.0f}")
+        d1, d2, d3, d4 = st.columns(4)
+        d1.metric("Extract — Base ARR", f"${derived_metrics.base_arr:,.0f}")
+        d2.metric("Extract — Trailing-12 NRR", f"{derived_metrics.nrr_pct}%")
+        d3.metric("Extract — Churned ARR (TTM)", f"${derived_metrics.churned_arr:,.0f}")
+        d4.metric("Extract — Expansion ARR (TTM)", f"${derived_metrics.expansion_arr:,.0f}")
 
-            with st.expander("View underlying data"):
-                st.caption(
-                    "Existing book is a top-line ARR/revenue overlay derived from your uploaded extract "
-                    "(smooth monthly runoff, no individual contract dates). New business runs through the "
-                    "full Bowtie engine (Phase 1-3) with real deferred revenue mechanics."
-                )
-                st.dataframe(_bold_headers(style_wide(wide(combined))), width='stretch')
+        with st.expander("View underlying data"):
+            st.caption(
+                "Existing book is a top-line ARR/revenue overlay derived from your uploaded extract "
+                "(smooth monthly runoff, no individual contract dates). New business runs through the "
+                "full Bowtie engine (Phase 1-3) with real deferred revenue mechanics."
+            )
+            st.dataframe(_bold_headers(style_wide(wide(combined))), width='stretch')
 
-    with tabs[0 + tab_offset]:
+    elif selected_page == "📈 Pipeline & Capacity":
         st.subheader("Bookings: Capacity vs. Demand Constraint")
         st.caption("Actual bookings are constrained by whichever is lower: qualified demand or sales capacity. "
-                    "All bookings figures on this tab are TCV (Total Contract Value) — the same unit as Avg Deal Size and AE quota — not ARR.")
+                    "All bookings figures on this page are TCV (Total Contract Value) — the same unit as Avg Deal Size and AE quota — not ARR.")
         with st.expander("What do these terms mean?"):
             st.markdown(
                 "- **Capacity-Constrained Bookings (TCV)** — what AEs *could* close this month given headcount, ramp, and quota alone.\n"
@@ -1388,7 +1584,7 @@ if st.session_state.app_mode == "Full Company (All Segments)":
                 st.markdown(f"**{m}**")
                 st.dataframe(_bold_headers(style_wide(wide(results[m]["phase1_df"]))), width='stretch')
 
-    with tabs[1 + tab_offset]:
+    elif selected_page == "💰 Revenue Recognition":
         st.subheader("Live ARR Trajectory")
         st.caption("Bookings ≠ revenue. Implementation lag delays go-live and revenue recognition, creating a gap between contracted ARR, billings and recognized revenue.")
         col1, col2, col3 = st.columns(3)
@@ -1410,7 +1606,7 @@ if st.session_state.app_mode == "Full Company (All Segments)":
                 st.markdown(f"**{m}**")
                 st.dataframe(_bold_headers(style_wide(wide(results[m]["phase2_df"]))), width='stretch')
 
-    with tabs[2 + tab_offset]:
+    elif selected_page == "🔄 Renewals & NRR":
         st.subheader("Renewal Cohort Summary")
         if len(renewals_df) > 0:
             summary = summarize_renewals(renewals_df)
@@ -1434,16 +1630,21 @@ if st.session_state.app_mode == "Full Company (All Segments)":
 # COMPARE TWO SCENARIOS MODE
 # ===========================================================================
 else:
-    name1, name2 = st.columns(2)
-    scenario_a_name = name1.text_input("Scenario A label", "Scenario A — Base Plan", key="scenario_a_label")
-    scenario_b_name = name2.text_input("Scenario B label", "Scenario B — Alternative Plan", key="scenario_b_label")
+    with st.sidebar:
+        st.markdown(
+            '<p style="font-weight: 700; font-size: 15px; margin-bottom: 4px;">Scenario Labels</p>',
+            unsafe_allow_html=True,
+        )
+        scenario_a_name = st.text_input("Scenario A", "Scenario A — Base Plan", key="scenario_a_label")
+        scenario_b_name = st.text_input("Scenario B", "Scenario B — Alternative Plan", key="scenario_b_label")
 
-    with st.expander(scenario_a_name, expanded=True):
-        cfg_a = render_inputs("a", scenario_a_name, num_months_default=global_horizon, show_horizon=False, show_gross_margin=False)
-        cfg_a["gross_margin_pct"] = global_margin
-    with st.expander(scenario_b_name, expanded=True):
-        cfg_b = render_inputs("b", scenario_b_name, num_months_default=global_horizon, show_horizon=False, show_gross_margin=False)
-        cfg_b["gross_margin_pct"] = global_margin
+        st.divider()
+        with st.expander(scenario_a_name, expanded=False):
+            cfg_a = render_inputs("a", scenario_a_name, num_months_default=global_horizon, show_horizon=False, show_gross_margin=False)
+            cfg_a["gross_margin_pct"] = global_margin
+        with st.expander(scenario_b_name, expanded=False):
+            cfg_b = render_inputs("b", scenario_b_name, num_months_default=global_horizon, show_horizon=False, show_gross_margin=False)
+            cfg_b["gross_margin_pct"] = global_margin
 
     num_months = global_horizon
     cfg_a["num_months"] = num_months
@@ -1459,9 +1660,19 @@ else:
     p2a, p2b = result_a["phase2_df"], result_b["phase2_df"]
     rna, rnb = result_a["renewals_df"], result_b["renewals_df"]
 
-    tab1, tab2, tab3 = st.tabs(["📊 KPI Comparison", "🌉 ARR & Revenue Bridges", "📋 Raw Data"])
+    cmp_pages = ["📊 KPI Comparison", "🌉 ARR & Revenue Bridges", "📋 Raw Data"]
+    cmp_tab_labels = [pg.split(" ", 1)[1] for pg in cmp_pages]
+    selected_cmp_tab = st.segmented_control(
+        "cmp_nav", cmp_tab_labels,
+        default=cmp_tab_labels[0],
+        key="cmp_page_seg",
+        label_visibility="collapsed",
+    )
+    if selected_cmp_tab is None:
+        selected_cmp_tab = cmp_tab_labels[0]
+    selected_page = cmp_pages[cmp_tab_labels.index(selected_cmp_tab)]
 
-    with tab1:
+    if selected_page == "📊 KPI Comparison":
         col1, col2 = st.columns(2)
         with col1:
             st.subheader(scenario_a_name)
@@ -1477,12 +1688,7 @@ else:
             st.metric("Ending Deferred Revenue", f"${p2b['deferred_revenue_balance'].iloc[-1]:,.0f}",
                        delta=f"${p2b['deferred_revenue_balance'].iloc[-1] - p2a['deferred_revenue_balance'].iloc[-1]:,.0f}")
 
-    with tab2:
-        # Compact answer-first table, before the waterfalls — Ending ARR,
-        # Recognized Revenue and NRR are the latest full-year figure (same
-        # scope as the Executive Dashboard's hero tiles); Capacity Cost is
-        # cumulative over the full horizon (there's no annual breakdown of
-        # capacity cost elsewhere in the app to stay consistent with).
+    elif selected_page == "🌉 ARR & Revenue Bridges":
         cmp_annual_a = aggregate_periods(p2a, rna, None, result_a["all_contracts"], num_months, period_months=12)
         cmp_annual_b = aggregate_periods(p2b, rnb, None, result_b["all_contracts"], num_months, period_months=12)
         cmp_latest_a, cmp_latest_b = cmp_annual_a.iloc[-1], cmp_annual_b.iloc[-1]
@@ -1561,7 +1767,7 @@ else:
         )
         st.plotly_chart(fig_rev, width='stretch')
 
-    with tab3:
+    elif selected_page == "📋 Raw Data":
         st.caption("Tables shown with months as columns, metrics as rows.")
         st.subheader(f"{scenario_a_name} — Phase 2 Output")
         st.dataframe(_bold_headers(style_wide(wide(p2a))), width='stretch')
@@ -1569,3 +1775,8 @@ else:
         st.dataframe(_bold_headers(style_wide(wide(p2b))), width='stretch')
 
 st.caption("Built on the Bowtie Model (Winning by Design). All math is deterministic — no randomized variables anywhere in this model.")
+
+_render_ai_fab()
+
+if st.session_state["sm_last_known"] is None:
+    st.session_state["sm_last_known"] = _snapshot()
