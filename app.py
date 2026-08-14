@@ -497,15 +497,22 @@ _COUNT_DECIMAL_FIELDS = {  # counts that are legitimately fractional ("expected 
 }
 
 
+def _fmt_dollar_scaled(val):
+    """Shared auto-scaling formatter: ≥$1M → $X.XXM, ≥$1K → $X.XXK, else $X."""
+    if val is None or pd.isna(val):
+        return "—"
+    if abs(val) >= 1_000_000:
+        return f"${val / 1_000_000:,.2f}M"
+    if abs(val) >= 1_000:
+        return f"${val / 1_000:,.2f}K"
+    return f"${val:,.0f}"
+
+
 def _format_cell(value, field_name: str) -> str:
     if pd.isna(value):
         return "—"
     if field_name in _CURRENCY_FIELDS:
-        if abs(value) >= 1_000_000:
-            return f"${value / 1_000_000:,.1f}M"
-        elif abs(value) >= 1_000:
-            return f"${value / 1_000:,.1f}K"
-        return f"${value:,.0f}"
+        return _fmt_dollar_scaled(value)
     if field_name in _CURRENCY_PRECISE_FIELDS:
         return f"${value:,.3f}"
     if field_name in _PERCENT_FIELDS:
@@ -901,13 +908,16 @@ def revenue_by_origin(contracts: list, num_months: int) -> dict:
 def make_waterfall(labels, values, title, measure=None):
     if measure is None:
         measure = ["absolute"] + ["relative"] * (len(values) - 2) + ["total"]
-        
+
+    hover_texts = [_fmt_dollar_scaled(v) for v in values]
     fig = go.Figure(go.Waterfall(
         x=labels, y=values, measure=measure,
         connector={"line": {"color": "#E2E8F0", "width": 1}},
-        increasing_marker_color="#16A34A", # Green for New ARR / Expansion
-        decreasing_marker_color="#DC2626", # Red for Contraction / Churn
-        totals_marker_color="#163A63"      # Navy for Beginning / Ending
+        increasing_marker_color="#16A34A",
+        decreasing_marker_color="#DC2626",
+        totals_marker_color="#163A63",
+        customdata=hover_texts,
+        hovertemplate="%{x}: %{customdata}<extra></extra>",
     ))
     
     fig.update_layout(
@@ -1294,14 +1304,7 @@ if st.session_state.app_mode == "Full Company (All Segments)":
             period_months=3, existing_book_base_arr=eb_base_arr, existing_book_base_logos=eb_base_logos,
         )
 
-        # Helper function for $XX.XM formatting
-        # Helper function for millions formatting
-        def _fmt_millions(val):
-            if val is None or pd.isna(val):
-                return "—"
-            if abs(val) >= 1_000_000:
-                return f"${val / 1_000_000:,.1f}M"
-            return f"${val:,.0f}"
+        _fmt_millions = _fmt_dollar_scaled
 
         # Re-compute delta strings for the metrics
         arr_growth_pct = ((latest["ending_arr"] / prior["ending_arr"]) - 1) * 100 if prior is not None and prior["ending_arr"] else None
@@ -1396,11 +1399,11 @@ if st.session_state.app_mode == "Full Company (All Segments)":
             )
             _by_year_src = _by_year_labeled.set_index("period")
             by_year = pd.DataFrame({
-                "Ending ARR": _by_year_src["ending_arr"].apply(lambda v: f"${v:,.0f}" if pd.notna(v) else "—"),
-                "Recognized Revenue": _by_year_src["revenue"].apply(lambda v: f"${v:,.0f}" if pd.notna(v) else "—"),
+                "Ending ARR": _by_year_src["ending_arr"].apply(_fmt_dollar_scaled),
+                "Recognized Revenue": _by_year_src["revenue"].apply(_fmt_dollar_scaled),
                 "NRR": _by_year_src["nrr_pct"].apply(lambda v: f"{v:.1f}%" if pd.notna(v) else "—"),
                 "Live Accounts": _by_year_src["ending_logos"].apply(lambda v: f"{int(v):,}" if pd.notna(v) else "—"),
-                "Deferred Revenue": _by_year_src["deferred_revenue"].apply(lambda v: f"${v:,.0f}" if pd.notna(v) else "—"),
+                "Deferred Revenue": _by_year_src["deferred_revenue"].apply(_fmt_dollar_scaled),
             }).T
             st.dataframe(_bold_headers(by_year), use_container_width=True)
 
@@ -1416,7 +1419,7 @@ if st.session_state.app_mode == "Full Company (All Segments)":
                 pct = _pct_change(impact, year1_row[d_field])
                 drivers_rows.append({
                     "Driver": d_label,
-                    "Impact on ARR": f"${impact:,.0f}" if pd.notna(impact) else "—",
+                    "Impact on ARR": _fmt_dollar_scaled(impact),
                     "vs Year 1": f"{pct:+.1f}%" if pct is not None else "—",
                 })
             st.dataframe(_bold_headers(pd.DataFrame(drivers_rows).set_index("Driver")), use_container_width=True)
@@ -1459,10 +1462,14 @@ if st.session_state.app_mode == "Full Company (All Segments)":
                 forecast_rows = chart_annual[chart_annual["type"] == "Forecast"]
                 if len(actual_rows) > 0:
                     arr_fig.add_trace(go.Bar(x=actual_rows["period"], y=actual_rows["ending_arr"],
-                                              name="Actual", marker_color="#2563EB"))
+                                              name="Actual", marker_color="#2563EB",
+                                              customdata=[_fmt_dollar_scaled(v) for v in actual_rows["ending_arr"]],
+                                              hovertemplate="%{x}: %{customdata}<extra></extra>"))
                 if len(forecast_rows) > 0:
                     arr_fig.add_trace(go.Bar(x=forecast_rows["period"], y=forecast_rows["ending_arr"],
-                                              name="Forecast", marker_color="#93C5FD"))
+                                              name="Forecast", marker_color="#93C5FD",
+                                              customdata=[_fmt_dollar_scaled(v) for v in forecast_rows["ending_arr"]],
+                                              hovertemplate="%{x}: %{customdata}<extra></extra>"))
                 arr_fig.update_layout(showlegend=True, height=320, margin=dict(t=20, b=20))
                 st.plotly_chart(arr_fig, use_container_width=True)
             else:
@@ -1483,6 +1490,8 @@ if st.session_state.app_mode == "Full Company (All Segments)":
                     mode="lines", line=dict(color="#2563EB", width=2.5),
                     fill="tozeroy", fillcolor="rgba(37, 99, 235, 0.08)",
                     name="Live ARR",
+                    customdata=[_fmt_dollar_scaled(v) for v in chart_series],
+                    hovertemplate="Month %{x}: %{customdata}<extra></extra>",
                 ))
                 arr_fig.update_layout(
                     showlegend=False, height=320, margin=dict(t=20, b=20),
@@ -1737,17 +1746,17 @@ else:
         col1, col2 = st.columns(2)
         with col1:
             st.subheader(scenario_a_name)
-            st.metric("Ending Live ARR", f"${p2a['live_arr'].iloc[-1]:,.0f}")
-            st.metric("Total Revenue Recognized", f"${p2a['total_revenue_recognized'].sum():,.0f}")
-            st.metric("Ending Deferred Revenue", f"${p2a['deferred_revenue_balance'].iloc[-1]:,.0f}")
+            st.metric("Ending Live ARR", _fmt_dollar_scaled(p2a['live_arr'].iloc[-1]))
+            st.metric("Total Revenue Recognized", _fmt_dollar_scaled(p2a['total_revenue_recognized'].sum()))
+            st.metric("Ending Deferred Revenue", _fmt_dollar_scaled(p2a['deferred_revenue_balance'].iloc[-1]))
         with col2:
             st.subheader(scenario_b_name)
-            st.metric("Ending Live ARR", f"${p2b['live_arr'].iloc[-1]:,.0f}",
-                       delta=f"${p2b['live_arr'].iloc[-1] - p2a['live_arr'].iloc[-1]:,.0f}")
-            st.metric("Total Revenue Recognized", f"${p2b['total_revenue_recognized'].sum():,.0f}",
-                       delta=f"${p2b['total_revenue_recognized'].sum() - p2a['total_revenue_recognized'].sum():,.0f}")
-            st.metric("Ending Deferred Revenue", f"${p2b['deferred_revenue_balance'].iloc[-1]:,.0f}",
-                       delta=f"${p2b['deferred_revenue_balance'].iloc[-1] - p2a['deferred_revenue_balance'].iloc[-1]:,.0f}")
+            st.metric("Ending Live ARR", _fmt_dollar_scaled(p2b['live_arr'].iloc[-1]),
+                       delta=_fmt_dollar_scaled(p2b['live_arr'].iloc[-1] - p2a['live_arr'].iloc[-1]))
+            st.metric("Total Revenue Recognized", _fmt_dollar_scaled(p2b['total_revenue_recognized'].sum()),
+                       delta=_fmt_dollar_scaled(p2b['total_revenue_recognized'].sum() - p2a['total_revenue_recognized'].sum()))
+            st.metric("Ending Deferred Revenue", _fmt_dollar_scaled(p2b['deferred_revenue_balance'].iloc[-1]),
+                       delta=_fmt_dollar_scaled(p2b['deferred_revenue_balance'].iloc[-1] - p2a['deferred_revenue_balance'].iloc[-1]))
 
     elif selected_page == "🌉 ARR & Revenue Bridges":
         cmp_annual_a = aggregate_periods(p2a, rna, None, result_a["all_contracts"], num_months, period_months=12)
@@ -1759,22 +1768,19 @@ else:
         col_a_label = scenario_a_name if scenario_a_name != scenario_b_name else f"{scenario_a_name} (A)"
         col_b_label = scenario_b_name if scenario_a_name != scenario_b_name else f"{scenario_b_name} (B)"
 
-        def _fmt_dollar(v):
-            return f"${v:,.0f}" if v is not None and not pd.isna(v) else "—"
-
         def _fmt_pct(v):
             return f"{v:.1f}%" if v is not None and not pd.isna(v) else "—"
 
         summary_table = pd.DataFrame([
-            {"Metric": "Ending ARR", col_a_label: _fmt_dollar(cmp_latest_a["ending_arr"]), col_b_label: _fmt_dollar(cmp_latest_b["ending_arr"]),
-             "Δ (B − A)": _fmt_dollar(cmp_latest_b["ending_arr"] - cmp_latest_a["ending_arr"])},
-            {"Metric": "Recognized Revenue", col_a_label: _fmt_dollar(cmp_latest_a["revenue"]), col_b_label: _fmt_dollar(cmp_latest_b["revenue"]),
-             "Δ (B − A)": _fmt_dollar(cmp_latest_b["revenue"] - cmp_latest_a["revenue"])},
+            {"Metric": "Ending ARR", col_a_label: _fmt_dollar_scaled(cmp_latest_a["ending_arr"]), col_b_label: _fmt_dollar_scaled(cmp_latest_b["ending_arr"]),
+             "Δ (B − A)": _fmt_dollar_scaled(cmp_latest_b["ending_arr"] - cmp_latest_a["ending_arr"])},
+            {"Metric": "Recognized Revenue", col_a_label: _fmt_dollar_scaled(cmp_latest_a["revenue"]), col_b_label: _fmt_dollar_scaled(cmp_latest_b["revenue"]),
+             "Δ (B − A)": _fmt_dollar_scaled(cmp_latest_b["revenue"] - cmp_latest_a["revenue"])},
             {"Metric": "NRR", col_a_label: _fmt_pct(cmp_latest_a["nrr_pct"]), col_b_label: _fmt_pct(cmp_latest_b["nrr_pct"]),
              "Δ (B − A)": (f"{cmp_latest_b['nrr_pct'] - cmp_latest_a['nrr_pct']:.1f} pts"
                             if pd.notna(cmp_latest_a["nrr_pct"]) and pd.notna(cmp_latest_b["nrr_pct"]) else "—")},
-            {"Metric": "Capacity Cost", col_a_label: _fmt_dollar(capacity_cost_a), col_b_label: _fmt_dollar(capacity_cost_b),
-             "Δ (B − A)": _fmt_dollar(capacity_cost_b - capacity_cost_a)},
+            {"Metric": "Capacity Cost", col_a_label: _fmt_dollar_scaled(capacity_cost_a), col_b_label: _fmt_dollar_scaled(capacity_cost_b),
+             "Δ (B − A)": _fmt_dollar_scaled(capacity_cost_b - capacity_cost_a)},
         ])
         st.dataframe(_bold_headers(summary_table.set_index("Metric")), width='stretch')
         st.caption("Ending ARR, Recognized Revenue and NRR reflect the latest full year; Capacity Cost is cumulative over the full horizon.")
