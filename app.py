@@ -271,6 +271,8 @@ try:
 except Exception:
     _api_key = ""
 
+_ai_model_outputs: dict = {}
+
 
 def _render_ai_fab():
     """Render a fixed-position FAB that opens the AI chat popover."""
@@ -338,16 +340,42 @@ def _render_ai_fab():
 
             def _build_system_prompt() -> str:
                 snap = _snapshot()
-                lines = ["You are a concise SaaS revenue modeling assistant embedded in a B2B revenue architecture dashboard.",
-                         "The model is deterministic — capacity-constrained pipeline × win rates × contract terms → bookings → ratable revenue recognition → renewals/NRR.",
-                         "Answer what-if questions about the user's current assumptions and outputs. Be specific, reference numbers, and keep answers under 150 words.",
-                         "", "CURRENT ASSUMPTIONS:"]
+                outputs = _ai_model_outputs
+                lines = [
+                    "You are a concise SaaS revenue modeling assistant embedded in a B2B revenue architecture dashboard.",
+                    "The model is deterministic — capacity-constrained pipeline × win rates × contract terms → bookings → ratable revenue recognition → renewals/NRR.",
+                    "",
+                    "CRITICAL RULES — FOLLOW EXACTLY:",
+                    "1. You MUST NEVER perform any arithmetic, estimation, or calculation yourself.",
+                    "2. For ANY question about current model outputs (ARR, revenue, NRR, accounts, deferred revenue, etc.):",
+                    "   - Look up the answer from the COMPUTED MODEL OUTPUTS section below.",
+                    "   - Quote the EXACT number from that section. Do not round, estimate, or recalculate.",
+                    "   - If the value is not in COMPUTED MODEL OUTPUTS, say: \"That metric is not available in the current model outputs.\"",
+                    "3. For change-request questions (\"what if we hire 2 more AEs\"), explain that you can describe the likely directional impact but the user should adjust the inputs in the sidebar and see the real model recalculate.",
+                    "4. NEVER produce a table of numbers you calculated yourself. NEVER say \"estimated\" or \"approximately\" for values that exist in the model outputs.",
+                    "5. Keep answers under 150 words.",
+                    "",
+                    "CURRENT ASSUMPTIONS (input parameters):",
+                ]
                 for k, v in sorted(snap.items()):
                     lines.append(f"  {k}: {v}")
+                lines.append("")
+                lines.append("COMPUTED MODEL OUTPUTS (these are the REAL, already-computed values — quote them exactly):")
+                if outputs:
+                    for k, v in sorted(outputs.items()):
+                        if v is not None:
+                            if isinstance(v, float):
+                                lines.append(f"  {k}: {v:,.2f}")
+                            elif isinstance(v, list):
+                                lines.append(f"  {k}: {v}")
+                            else:
+                                lines.append(f"  {k}: {v}")
+                else:
+                    lines.append("  (no model outputs computed yet)")
                 return "\n".join(lines)
 
             if not st.session_state.ai_messages:
-                st.caption("Ask what-if questions about your revenue model.")
+                st.caption("Ask about your model's current outputs or explore what-if scenarios.")
 
             for msg in st.session_state.ai_messages:
                 with st.chat_message(msg["role"]):
@@ -1136,6 +1164,49 @@ if st.session_state.app_mode == "Full Company (All Segments)":
     eb_base_arr = derived_metrics.base_arr if derived_metrics is not None else 0.0
     eb_base_logos = derived_metrics.base_logo_count if derived_metrics is not None else 0
 
+    _fc_annual = aggregate_periods(
+        phase2_df, renewals_df, existing_book_df, all_contracts, num_months,
+        period_months=12, gross_margin_pct=gross_margin_pct,
+        existing_book_base_arr=eb_base_arr, existing_book_base_logos=eb_base_logos,
+    )
+    _fc_annual = _fc_annual.rename(columns={"new_arr_booked": "new_arr_live"})
+    _fc_annual["deferred_revenue"] = [
+        (lambda match: match.iloc[0] if len(match) else None)(
+            phase2_df.loc[phase2_df["month"] == min((i + 1) * 12, num_months), "deferred_revenue_balance"]
+        )
+        for i in range(len(_fc_annual))
+    ]
+    _fc_capacity_cost = phase1_df["total_cost_of_capacity"].sum()
+    _ai_model_outputs.clear()
+    _ai_model_outputs["mode"] = "Full Company"
+    _ai_model_outputs["markets"] = selected_markets
+    _ai_model_outputs["num_months"] = num_months
+    _ai_model_outputs["gross_margin_pct"] = gross_margin_pct
+    for idx, row in _fc_annual.iterrows():
+        period = row["period"]
+        _ai_model_outputs[f"{period}_ending_arr"] = row["ending_arr"]
+        _ai_model_outputs[f"{period}_beginning_arr"] = row["beginning_arr"]
+        _ai_model_outputs[f"{period}_new_arr_live"] = row["new_arr_live"]
+        _ai_model_outputs[f"{period}_expansion_arr"] = row["expansion_arr"]
+        _ai_model_outputs[f"{period}_contraction_arr"] = row["contraction_arr"]
+        _ai_model_outputs[f"{period}_churned_arr"] = row["churned_arr"]
+        _ai_model_outputs[f"{period}_nrr_pct"] = row["nrr_pct"]
+        _ai_model_outputs[f"{period}_revenue"] = row["revenue"]
+        _ai_model_outputs[f"{period}_ending_logos"] = row["ending_logos"]
+        _ai_model_outputs[f"{period}_new_logos"] = row["new_logos"]
+        _ai_model_outputs[f"{period}_churned_logos"] = row["churned_logos"]
+        _ai_model_outputs[f"{period}_deferred_revenue"] = row.get("deferred_revenue")
+        _ai_model_outputs[f"{period}_arpa_ending"] = row.get("arpa_ending")
+        if "ltv" in row:
+            _ai_model_outputs[f"{period}_ltv"] = row["ltv"]
+        if "gross_dollar_churn_rate_pct" in row:
+            _ai_model_outputs[f"{period}_gross_dollar_churn_rate_pct"] = row["gross_dollar_churn_rate_pct"]
+        if "logo_churn_rate_pct" in row:
+            _ai_model_outputs[f"{period}_logo_churn_rate_pct"] = row["logo_churn_rate_pct"]
+    _ai_model_outputs["total_capacity_cost"] = _fc_capacity_cost
+    _ai_model_outputs["ending_deferred_revenue"] = phase2_df["deferred_revenue_balance"].iloc[-1]
+    _ai_model_outputs["periods"] = list(_fc_annual["period"])
+
     fc_pages = ["📐 Executive Dashboard", "📈 Pipeline & Capacity", "💰 Revenue Recognition", "🔄 Renewals & NRR"]
     if existing_book_df is not None:
         fc_pages.insert(1, "🏢 Total Company")
@@ -1169,29 +1240,7 @@ if st.session_state.app_mode == "Full Company (All Segments)":
 
     if selected_page == "📐 Executive Dashboard":
         st.markdown('<p class="dashboard-caption">ARR, revenue, retention and key forecast drivers.</p>', unsafe_allow_html=True)
-        annual = aggregate_periods(
-            phase2_df, renewals_df, existing_book_df, all_contracts, num_months,
-            period_months=12, gross_margin_pct=gross_margin_pct,
-            existing_book_base_arr=eb_base_arr, existing_book_base_logos=eb_base_logos,
-        )
-        # aggregate_periods()'s "new_arr_booked" is go-live-date-based (see
-        # saas_metrics.py docstring), not signed-date — renamed locally so it
-        # doesn't collide with the genuinely signed-date "new_arr_booked" that
-        # comes straight from Phase 2 (revenue_recognition_engine.py) elsewhere
-        # in this app. See _LABELS for the full explanation.
-        annual = annual.rename(columns={"new_arr_booked": "new_arr_live"})
-        # Per-period deferred revenue for the "By Year" table below — not an
-        # aggregate_periods() field (it's a point-in-time balance, not a
-        # period sum), so pulled from combined phase2_df at each forecast
-        # period's last month. annual's row order matches period index p
-        # exactly (aggregate_periods builds it that way), so position i's
-        # end month is min((i+1)*12, num_months).
-        annual["deferred_revenue"] = [
-            (lambda match: match.iloc[0] if len(match) else None)(
-                phase2_df.loc[phase2_df["month"] == min((i + 1) * 12, num_months), "deferred_revenue_balance"]
-            )
-            for i in range(len(annual))
-        ]
+        annual = _fc_annual.copy()
         annual["type"] = "Forecast"
 
         if historical_annual is not None and len(historical_annual) > 0:
@@ -1659,6 +1708,18 @@ else:
 
     p2a, p2b = result_a["phase2_df"], result_b["phase2_df"]
     rna, rnb = result_a["renewals_df"], result_b["renewals_df"]
+
+    _ai_model_outputs.clear()
+    _ai_model_outputs["mode"] = "Compare Scenarios"
+    _ai_model_outputs["scenario_a_name"] = scenario_a_name
+    _ai_model_outputs["scenario_b_name"] = scenario_b_name
+    _ai_model_outputs["num_months"] = num_months
+    _ai_model_outputs["scenario_a_ending_arr"] = p2a["live_arr"].iloc[-1]
+    _ai_model_outputs["scenario_a_total_revenue"] = p2a["total_revenue_recognized"].sum()
+    _ai_model_outputs["scenario_a_ending_deferred_revenue"] = p2a["deferred_revenue_balance"].iloc[-1]
+    _ai_model_outputs["scenario_b_ending_arr"] = p2b["live_arr"].iloc[-1]
+    _ai_model_outputs["scenario_b_total_revenue"] = p2b["total_revenue_recognized"].sum()
+    _ai_model_outputs["scenario_b_ending_deferred_revenue"] = p2b["deferred_revenue_balance"].iloc[-1]
 
     cmp_pages = ["📊 KPI Comparison", "🌉 ARR & Revenue Bridges", "📋 Raw Data"]
     cmp_tab_labels = [pg.split(" ", 1)[1] for pg in cmp_pages]
