@@ -272,6 +272,134 @@ except Exception:
     _api_key = ""
 
 _ai_model_outputs: dict = {}
+_ai_run_context: dict = {}
+
+_SUFFIX_LABELS = {
+    "num_aes": "New AEs", "existing_aes": "Existing AEs",
+    "num_bdrs": "New BDRs", "existing_bdrs": "Existing BDRs",
+    "ae_quota_m": "AE quota ($M)", "bdr_sql": "BDR SQLs/mo",
+    "marketing_sqls": "Mktg SQLs/mo", "selfsrc": "AE self-src/mo",
+    "deal": "Avg deal size — TCV ($)",
+    "wm": "Win % — marketing", "wb": "Win % — BDR", "ws": "Win % — self-sourced",
+    "term": "Term (mo)", "lag": "Impl. lag (mo)",
+    "churn": "Churn %", "exp": "Expansion %", "contr": "Contraction %",
+    "exec": "Exec. efficiency",
+    "ae_base": "AE annual base ($)", "ae_var": "AE annual variable @ 100% ($)",
+    "bdr_base": "BDR annual base ($)", "bdr_var": "BDR annual variable @ 100% ($)",
+    "psfee": "Professional services fee (%)", "cadence": "Hiring cadence (mo)",
+    "gm": "Gross margin %",
+}
+
+_MARKET_KEY_TO_NAME = {"smb": "SMB", "mm": "Mid-Market", "ent": "Enterprise", "inb": "Inbound",
+                       "s": "Scenario", "a": "Scenario A", "b": "Scenario B"}
+
+
+def _humanize_key(raw_key: str) -> str | None:
+    for prefix, market_name in _MARKET_KEY_TO_NAME.items():
+        if raw_key.startswith(prefix + "_"):
+            suffix = raw_key[len(prefix) + 1:]
+            label = _SUFFIX_LABELS.get(suffix)
+            if label:
+                return f"{market_name} — {label}"
+    return None
+
+
+def _run_whatif_simulation(overrides: dict) -> dict | None:
+    ctx = _ai_run_context
+    if not ctx or ctx.get("mode") != "Full Company":
+        return None
+    import copy
+    cfgs = copy.deepcopy(ctx["cfgs"])
+    market_names = ctx["market_names"]
+    market_keys = ctx["market_keys"]
+    num_months = ctx["num_months"]
+    gross_margin_pct = ctx["gross_margin_pct"]
+    eb_base_arr = ctx.get("eb_base_arr", 0.0)
+    eb_base_logos = ctx.get("eb_base_logos", 0)
+
+    for human_label, new_value in overrides.items():
+        matched = False
+        for market, mkey in market_keys.items():
+            for suffix, slabel in _SUFFIX_LABELS.items():
+                full_label = f"{market} — {slabel}"
+                if human_label.lower() == full_label.lower():
+                    cfg = cfgs[market]
+                    cfg_field = _suffix_to_cfg_field(suffix, new_value)
+                    if cfg_field:
+                        cfg[cfg_field[0]] = cfg_field[1]
+                        matched = True
+                    break
+            if matched:
+                break
+        if not matched:
+            for suffix, slabel in _SUFFIX_LABELS.items():
+                if human_label.lower() == slabel.lower():
+                    for market in market_names:
+                        cfg = cfgs[market]
+                        cfg_field = _suffix_to_cfg_field(suffix, new_value)
+                        if cfg_field:
+                            cfg[cfg_field[0]] = cfg_field[1]
+                    matched = True
+                    break
+
+    try:
+        results = {m: run_full_model(cfgs[m], num_months) for m in market_names}
+    except Exception:
+        return None
+
+    selected = ctx.get("selected_markets", market_names)
+    phase2_df = combine_phase2_dfs([results[m]["phase2_df"] for m in selected])
+    renewals_df = pd.concat([results[m]["renewals_df"] for m in selected], ignore_index=True)
+    all_contracts = [c for m in selected for c in results[m]["all_contracts"]]
+    phase1_df = combine_phase1_dfs([results[m]["phase1_df"] for m in selected])
+
+    annual = aggregate_periods(
+        phase2_df, renewals_df, None, all_contracts, num_months,
+        period_months=12, gross_margin_pct=gross_margin_pct,
+        existing_book_base_arr=eb_base_arr, existing_book_base_logos=eb_base_logos,
+    )
+    annual = annual.rename(columns={"new_arr_booked": "new_arr_live"})
+
+    new_outputs = {}
+    for _, row in annual.iterrows():
+        period = row["period"]
+        new_outputs[f"{period}_ending_arr"] = row["ending_arr"]
+        new_outputs[f"{period}_revenue"] = row["revenue"]
+        new_outputs[f"{period}_nrr_pct"] = row["nrr_pct"]
+        new_outputs[f"{period}_ending_logos"] = row["ending_logos"]
+    new_outputs["total_capacity_cost"] = phase1_df["total_cost_of_capacity"].sum()
+    new_outputs["periods"] = list(annual["period"])
+    return new_outputs
+
+
+def _suffix_to_cfg_field(suffix: str, value) -> tuple | None:
+    mapping = {
+        "num_aes": ("num_aes", int(value)),
+        "existing_aes": ("num_existing_aes", int(value)),
+        "num_bdrs": ("num_bdrs", int(value)),
+        "existing_bdrs": ("num_existing_bdrs", int(value)),
+        "ae_quota_m": ("ae_quota", float(value) * 1_000_000),
+        "bdr_sql": ("bdr_monthly_sql_quota", int(value)),
+        "marketing_sqls": ("marketing_sqls", float(value)),
+        "selfsrc": ("ae_self_sourced", float(value)),
+        "deal": ("avg_deal_size", int(value)),
+        "wm": ("win_marketing", float(value)),
+        "wb": ("win_bdr", float(value)),
+        "ws": ("win_self", float(value)),
+        "term": ("contract_term", int(value)),
+        "lag": ("implementation_lag", int(value)),
+        "churn": ("churn_rate", float(value)),
+        "exp": ("expansion_rate", float(value)),
+        "contr": ("contraction_rate", float(value)),
+        "exec": ("execution_efficiency", float(value)),
+        "ae_base": ("ae_base", int(value)),
+        "ae_var": ("ae_variable", int(value)),
+        "bdr_base": ("bdr_base", int(value)),
+        "bdr_var": ("bdr_variable", int(value)),
+        "psfee": ("ps_fee_pct", float(value)),
+        "cadence": ("hiring_cadence", int(value)),
+    }
+    return mapping.get(suffix)
 
 
 def _render_ai_fab():
@@ -351,14 +479,25 @@ def _render_ai_fab():
                     "   - Look up the answer from the COMPUTED MODEL OUTPUTS section below.",
                     "   - Quote the EXACT number from that section. Do not round, estimate, or recalculate.",
                     "   - If the value is not in COMPUTED MODEL OUTPUTS, say: \"That metric is not available in the current model outputs.\"",
-                    "3. For change-request questions (\"what if we hire 2 more AEs\"), explain that you can describe the likely directional impact but the user should adjust the inputs in the sidebar and see the real model recalculate.",
+                    "3. For what-if / hypothetical questions (\"what if we hire 2 more AEs\", \"what would happen if churn dropped to 8%\"):",
+                    "   - Respond with EXACTLY this JSON block and nothing else:",
+                    '   ```json',
+                    '   {"whatif": {"Parameter Name": new_value, ...}}',
+                    '   ```',
+                    "   - Use the EXACT parameter names from CURRENT ASSUMPTIONS below (e.g. \"Enterprise — New AEs\", \"SMB — Churn %\").",
+                    "   - If the user says \"add 2 more AEs to Enterprise\", compute the new total (current + 2) and put that as the value.",
+                    "   - If the user doesn't specify a segment, apply the change to ALL segments.",
+                    "   - Do NOT add any text before or after the JSON block.",
                     "4. NEVER produce a table of numbers you calculated yourself. NEVER say \"estimated\" or \"approximately\" for values that exist in the model outputs.",
                     "5. Keep answers under 150 words.",
+                    "6. NEVER reference internal variable names, session state keys, or code identifiers. Only use the human-readable parameter names shown below.",
                     "",
                     "CURRENT ASSUMPTIONS (input parameters):",
                 ]
                 for k, v in sorted(snap.items()):
-                    lines.append(f"  {k}: {v}")
+                    label = _humanize_key(k)
+                    if label:
+                        lines.append(f"  {label}: {v}")
                 lines.append("")
                 lines.append("COMPUTED MODEL OUTPUTS (these are the REAL, already-computed values — quote them exactly):")
                 if outputs:
@@ -372,6 +511,55 @@ def _render_ai_fab():
                                 lines.append(f"  {k}: {v}")
                 else:
                     lines.append("  (no model outputs computed yet)")
+                return "\n".join(lines)
+
+            def _process_whatif_response(text: str) -> str | None:
+                import json, re
+                match = re.search(r'```json\s*(\{.*?\})\s*```', text, re.DOTALL)
+                if not match:
+                    match = re.search(r'(\{"whatif"\s*:\s*\{.*?\}\s*\})', text, re.DOTALL)
+                if not match:
+                    return None
+                try:
+                    parsed = json.loads(match.group(1))
+                except json.JSONDecodeError:
+                    return None
+                if "whatif" not in parsed or not isinstance(parsed["whatif"], dict):
+                    return None
+
+                overrides = parsed["whatif"]
+                current = _ai_model_outputs
+                new_outputs = _run_whatif_simulation(overrides)
+                if new_outputs is None:
+                    return "I couldn't run that simulation. Try adjusting the inputs in the sidebar directly."
+
+                current_periods = current.get("periods", [])
+                new_periods = new_outputs.get("periods", [])
+                changes_desc = ", ".join(f"**{k}** → {v}" for k, v in overrides.items())
+                lines = [f"**What-if simulation:** {changes_desc}\n"]
+                lines.append("| Metric | Period | Current | Simulated | Change |")
+                lines.append("|--------|--------|---------|-----------|--------|")
+                for period in current_periods:
+                    if period not in new_periods:
+                        continue
+                    for metric, label in [("ending_arr", "Ending ARR"), ("revenue", "Revenue"), ("nrr_pct", "NRR %")]:
+                        cur_val = current.get(f"{period}_{metric}")
+                        new_val = new_outputs.get(f"{period}_{metric}")
+                        if cur_val is not None and new_val is not None:
+                            if metric == "nrr_pct":
+                                cur_fmt = f"{cur_val:.1f}%"
+                                new_fmt = f"{new_val:.1f}%"
+                                diff = new_val - cur_val
+                                diff_fmt = f"{diff:+.1f}pp"
+                            else:
+                                cur_fmt = _fmt_dollar_scaled(cur_val)
+                                new_fmt = _fmt_dollar_scaled(new_val)
+                                diff = new_val - cur_val
+                                diff_fmt = _fmt_dollar_scaled(abs(diff))
+                                diff_fmt = f"+{diff_fmt}" if diff >= 0 else f"-{diff_fmt}"
+                            lines.append(f"| {label} | {period} | {cur_fmt} | {new_fmt} | {diff_fmt} |")
+
+                lines.append("\n*This is a preview — inputs have not been changed. Adjust in the sidebar to apply.*")
                 return "\n".join(lines)
 
             if not st.session_state.ai_messages:
@@ -396,6 +584,10 @@ def _render_ai_fab():
                             messages=api_messages,
                         )
                     assistant_text = response.content[0].text
+
+                    whatif_result = _process_whatif_response(assistant_text)
+                    if whatif_result:
+                        assistant_text = whatif_result
                 except Exception as e:
                     assistant_text = f"⚠️ API error: {e}"
 
@@ -1216,6 +1408,17 @@ if st.session_state.app_mode == "Full Company (All Segments)":
     _ai_model_outputs["total_capacity_cost"] = _fc_capacity_cost
     _ai_model_outputs["ending_deferred_revenue"] = phase2_df["deferred_revenue_balance"].iloc[-1]
     _ai_model_outputs["periods"] = list(_fc_annual["period"])
+
+    _ai_run_context.clear()
+    _ai_run_context["mode"] = "Full Company"
+    _ai_run_context["cfgs"] = cfgs
+    _ai_run_context["market_names"] = MARKET_NAMES
+    _ai_run_context["market_keys"] = MARKET_KEYS
+    _ai_run_context["selected_markets"] = selected_markets
+    _ai_run_context["num_months"] = num_months
+    _ai_run_context["gross_margin_pct"] = gross_margin_pct
+    _ai_run_context["eb_base_arr"] = eb_base_arr
+    _ai_run_context["eb_base_logos"] = eb_base_logos
 
     fc_pages = ["📐 Executive Dashboard", "📈 Pipeline & Capacity", "💰 Revenue Recognition", "🔄 Renewals & NRR"]
     if existing_book_df is not None:
