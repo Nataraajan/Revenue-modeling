@@ -407,36 +407,38 @@ def _render_ai_fab():
     st.markdown("""
     <style>
     /* ── AI FAB: fix the popover's layout wrapper to bottom-right ── */
-    /* The stLayoutWrapper parent must be fixed so its child popover
-       leaves normal document flow entirely. */
     div[data-testid="stVerticalBlock"] > div[data-testid="stLayoutWrapper"]:has(> div[data-testid="stPopover"]) {
         position: fixed !important;
-        bottom: 24px !important;
+        bottom: 76px !important;
         right: 24px !important;
         z-index: 999 !important;
         width: auto !important;
         height: auto !important;
     }
-    /* Circular button — filled navy, white icon, no caret */
+    /* Pill button — white bg, navy text/icon, subtle shadow */
     div[data-testid="stPopover"] button[data-testid="stPopoverButton"] {
-        width: 56px !important;
-        height: 56px !important;
-        border-radius: 50% !important;
-        background: #163A63 !important;
-        color: #fff !important;
-        border: none !important;
-        font-size: 24px !important;
-        padding: 0 !important;
+        width: auto !important;
+        height: 44px !important;
+        border-radius: 22px !important;
+        background: #ffffff !important;
+        color: #163A63 !important;
+        border: 1px solid #e2e8f0 !important;
+        font-size: 14px !important;
+        font-weight: 600 !important;
+        padding: 0 18px 0 14px !important;
         min-height: 0 !important;
         display: flex !important;
         align-items: center !important;
         justify-content: center !important;
-        box-shadow: 0 4px 14px rgba(22, 58, 99, 0.35) !important;
+        gap: 6px !important;
+        box-shadow: 0 2px 12px rgba(22, 58, 99, 0.15) !important;
         cursor: pointer !important;
+        letter-spacing: 0.01em !important;
     }
     div[data-testid="stPopover"] button[data-testid="stPopoverButton"]:hover {
-        background: #1e4d7a !important;
-        box-shadow: 0 6px 20px rgba(22, 58, 99, 0.5) !important;
+        background: #f8fafc !important;
+        border-color: #163A63 !important;
+        box-shadow: 0 4px 16px rgba(22, 58, 99, 0.25) !important;
     }
     /* Hide the dropdown caret icon inside the popover button */
     div[data-testid="stPopover"] button[data-testid="stPopoverButton"] span[data-testid="stIconMaterial"] {
@@ -449,7 +451,7 @@ def _render_ai_fab():
     </style>
     """, unsafe_allow_html=True)
 
-    with st.popover("✦", use_container_width=False, help="Chat with AI assistant"):
+    with st.popover("✦ Ask Anything", use_container_width=False, help="Chat with AI assistant"):
         st.markdown(
             '<p style="font-weight: 600; font-size: 15px; color: #1E293B; margin-bottom: 8px;">'
             '🤖 AI Assistant</p>',
@@ -513,6 +515,13 @@ def _render_ai_fab():
                     lines.append("  (no model outputs computed yet)")
                 return "\n".join(lines)
 
+            def _human_label_to_raw_key(label: str) -> str | None:
+                for prefix, market_name in _MARKET_KEY_TO_NAME.items():
+                    for suffix, slabel in _SUFFIX_LABELS.items():
+                        if label.lower() == f"{market_name} — {slabel}".lower():
+                            return f"{prefix}_{suffix}"
+                return None
+
             def _process_whatif_response(text: str) -> str | None:
                 import json, re
                 match = re.search(r'```json\s*(\{.*?\})\s*```', text, re.DOTALL)
@@ -533,10 +542,34 @@ def _render_ai_fab():
                 if new_outputs is None:
                     return "I couldn't run that simulation. Try adjusting the inputs in the sidebar directly."
 
+                snap = _snapshot()
+                new_hire_suffixes = {"num_aes", "num_bdrs"}
+                lines = []
+                for human_label, new_val in overrides.items():
+                    raw_key = _human_label_to_raw_key(human_label)
+                    old_val = snap.get(raw_key) if raw_key else None
+                    display_label = human_label.replace(" — ", " ")
+                    if old_val is not None:
+                        lines.append(f"**{display_label}:** {old_val} → {new_val}")
+                    else:
+                        lines.append(f"**{display_label}:** → {new_val}")
+                    if raw_key:
+                        suffix = raw_key.split("_", 1)[1] if "_" in raw_key else ""
+                        if suffix in new_hire_suffixes and old_val is not None:
+                            try:
+                                old_count = int(old_val)
+                                new_count = int(new_val)
+                                if new_count > old_count:
+                                    prefix = raw_key.split("_")[0]
+                                    cad = int(snap.get(f"{prefix}_cadence", 3))
+                                    marginal_hire_month = old_count * cad + 1
+                                    lines.append(f"**First new hire ramps in:** month {marginal_hire_month}")
+                            except (ValueError, TypeError):
+                                pass
+                lines.append("")
+
                 current_periods = current.get("periods", [])
                 new_periods = new_outputs.get("periods", [])
-                changes_desc = ", ".join(f"**{k}** → {v}" for k, v in overrides.items())
-                lines = [f"**What-if simulation:** {changes_desc}\n"]
                 lines.append("| Metric | Period | Current | Simulated | Change |")
                 lines.append("|--------|--------|---------|-----------|--------|")
                 for period in current_periods:
@@ -545,19 +578,29 @@ def _render_ai_fab():
                     for metric, label in [("ending_arr", "Ending ARR"), ("revenue", "Revenue"), ("nrr_pct", "NRR %")]:
                         cur_val = current.get(f"{period}_{metric}")
                         new_val = new_outputs.get(f"{period}_{metric}")
-                        if cur_val is not None and new_val is not None:
-                            if metric == "nrr_pct":
-                                cur_fmt = f"{cur_val:.1f}%"
-                                new_fmt = f"{new_val:.1f}%"
+                        cur_is_nan = cur_val is None or (isinstance(cur_val, float) and pd.isna(cur_val))
+                        new_is_nan = new_val is None or (isinstance(new_val, float) and pd.isna(new_val))
+                        if cur_is_nan and new_is_nan:
+                            lines.append(f"| {label} | {period} | — | — | — |")
+                            continue
+                        if metric == "nrr_pct":
+                            cur_fmt = f"{cur_val:.1f}%" if not cur_is_nan else "—"
+                            new_fmt = f"{new_val:.1f}%" if not new_is_nan else "—"
+                            if not cur_is_nan and not new_is_nan:
                                 diff = new_val - cur_val
                                 diff_fmt = f"{diff:+.1f}pp"
                             else:
-                                cur_fmt = _fmt_dollar_scaled(cur_val)
-                                new_fmt = _fmt_dollar_scaled(new_val)
+                                diff_fmt = "—"
+                        else:
+                            cur_fmt = _fmt_dollar_scaled(cur_val) if not cur_is_nan else "—"
+                            new_fmt = _fmt_dollar_scaled(new_val) if not new_is_nan else "—"
+                            if not cur_is_nan and not new_is_nan:
                                 diff = new_val - cur_val
                                 diff_fmt = _fmt_dollar_scaled(abs(diff))
                                 diff_fmt = f"+{diff_fmt}" if diff >= 0 else f"-{diff_fmt}"
-                            lines.append(f"| {label} | {period} | {cur_fmt} | {new_fmt} | {diff_fmt} |")
+                            else:
+                                diff_fmt = "—"
+                        lines.append(f"| {label} | {period} | {cur_fmt} | {new_fmt} | {diff_fmt} |")
 
                 lines.append("\n*This is a preview — inputs have not been changed. Adjust in the sidebar to apply.*")
                 return "\n".join(lines)
