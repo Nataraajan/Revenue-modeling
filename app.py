@@ -1327,6 +1327,12 @@ if st.session_state.app_mode == "Full Company (All Segments)":
 
         st.divider()
 
+        selected_markets = st.multiselect(
+            "Markets to include", MARKET_NAMES, default=MARKET_NAMES, key="fc_market_filter",
+        )
+
+        st.divider()
+
         include_existing = st.checkbox("Historical customer data", value=False, key="fc_include_existing",
                                         help="Upload customer-level monthly revenue to derive historical NRR, churn and expansion.")
 
@@ -1337,6 +1343,19 @@ if st.session_state.app_mode == "Full Company (All Segments)":
     if include_existing:
         with st.sidebar:
             with st.expander("Existing Customer Book", expanded=True):
+                _tmpl_df = pd.DataFrame({
+                    "customer_id": ["Acme Corp", "Acme Corp", "Acme Corp", "Beta Inc", "Beta Inc", "Beta Inc"],
+                    "month": ["2024-01", "2024-02", "2024-03", "2024-01", "2024-02", "2024-03"],
+                    "revenue": [5000, 5000, 5000, 12000, 12000, 12500],
+                })
+                _tmpl_csv = _tmpl_df.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    label="📄 Download Template",
+                    data=_tmpl_csv,
+                    file_name="historical_revenue_template.csv",
+                    mime="text/csv",
+                    help="CSV template with the expected format: one row per customer per month (customer_id, month, revenue).",
+                )
                 uploaded = st.file_uploader("Upload revenue extract", type=["csv", "xlsx"],
                                              help="Long format: one row per customer per month.")
                 if uploaded is not None:
@@ -1386,19 +1405,14 @@ if st.session_state.app_mode == "Full Company (All Segments)":
                                 base_logo_count=derived_metrics.base_logo_count,
                             )
 
+    if not selected_markets:
+        st.warning("Select at least one market above to see results.")
+        st.stop()
+
     try:
         results = {m: run_full_model(cfgs[m], num_months) for m in MARKET_NAMES}
     except Exception as e:
         st.error(f"Model error: {e}")
-        st.stop()
-
-    with st.sidebar:
-        st.divider()
-        selected_markets = st.multiselect(
-            "Markets to include", MARKET_NAMES, default=MARKET_NAMES, key="fc_market_filter",
-        )
-    if not selected_markets:
-        st.warning("Select at least one market above to see results.")
         st.stop()
 
     phase1_df = combine_phase1_dfs([results[m]["phase1_df"] for m in selected_markets])
