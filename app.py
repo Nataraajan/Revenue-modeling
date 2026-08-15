@@ -1472,7 +1472,7 @@ if st.session_state.app_mode == "Full Company (All Segments)":
             cfg_list = [cfgs[m] for m in selected_markets]
             xlsx_bytes = generate_multi_pod_workbook_bytes(cfg_list, num_months)
             st.download_button(
-                label="📥 Export Excel",
+                label="📥 Download Auditable Excel",
                 data=xlsx_bytes,
                 file_name="company_financial_model.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
