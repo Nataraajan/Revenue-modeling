@@ -490,9 +490,14 @@ def _render_ai_fab():
                     "   - If the user says \"add 2 more AEs to Enterprise\", compute the new total (current + 2) and put that as the value.",
                     "   - If the user doesn't specify a segment, apply the change to ALL segments.",
                     "   - Do NOT add any text before or after the JSON block.",
-                    "4. NEVER produce a table of numbers you calculated yourself. NEVER say \"estimated\" or \"approximately\" for values that exist in the model outputs.",
-                    "5. Keep answers under 150 words.",
-                    "6. NEVER reference internal variable names, session state keys, or code identifiers. Only use the human-readable parameter names shown below.",
+                    "4. For segment comparison questions (\"which market contributes more to churn\"), present all three lenses from COMPUTED MODEL OUTPUTS, clearly labeled:",
+                    "   - **Highest rate**: each segment's own churn rate (e.g. SMB_Y2_churn_rate_pct).",
+                    "   - **Biggest contributor to blended rate**: segment's share of total beginning logos × its churn rate.",
+                    "   - **Biggest dollar impact**: churned_arr or churned_logos × ARPA for each segment.",
+                    "   Quote exact numbers from the per-segment outputs — do NOT compute your own.",
+                    "5. NEVER produce a table of numbers you calculated yourself. NEVER say \"estimated\" or \"approximately\" for values that exist in the model outputs.",
+                    "6. Keep answers under 200 words.",
+                    "7. NEVER reference internal variable names, session state keys, or code identifiers. Only use the human-readable parameter names shown below.",
                     "",
                     "CURRENT ASSUMPTIONS (input parameters):",
                 ]
@@ -944,8 +949,8 @@ def render_inputs(key: str, label: str, num_months_default: int = 24, show_gross
     bdr_sql = tq6.number_input("BDR SQLs/mo", 0, 50, 6, key=f"{key}_bdr_sql",
                                help="SQLs (sales-qualified leads) each fully-ramped BDR produces per month, feeding the AE pipeline.")
     tq7, tq8 = st.columns(2)
-    marketing_sqls = tq7.number_input("Mktg SQLs/mo", 0.0, 500.0, 12.0, key=f"{key}_marketing_sqls",
-                                      help="Marketing/inbound-sourced SQLs per month — a flat number, not a lead→MQL→SQL funnel. Channel mix (content, paid, partnerships) is too company-specific to model generically; see README.")
+    marketing_sqls = st.session_state.get(f"{key}_marketing_sqls", 12.0)
+    tq7.caption(f"Mktg SQLs/mo: **{marketing_sqls:.1f}**")
     ae_self_sourced = tq8.number_input("AE self-src/mo", 0.0, 20.0, 2.0, step=1.0, key=f"{key}_selfsrc",
                                        help="SQLs each AE generates on their own (existing network, outbound), on top of what BDRs and marketing feed them.")
 
@@ -1309,6 +1314,24 @@ if st.session_state.app_mode == "Full Company (All Segments)":
 
     cfgs = {}
     with st.sidebar:
+        with st.expander("Company-Wide Marketing", expanded=False):
+            total_mktg = st.number_input("Total marketing SQLs/mo", 0.0, 2000.0, 48.0,
+                                          key="fc_total_mktg_sqls",
+                                          help="Total company-wide marketing-sourced SQLs per month, allocated across segments by the percentages below.")
+            _alloc_defaults = {"SMB": 25, "Mid-Market": 25, "Enterprise": 25, "Inbound": 25}
+            alloc_cols = st.columns(len(MARKET_NAMES))
+            alloc_pcts = {}
+            for i, mkt in enumerate(MARKET_NAMES):
+                alloc_pcts[mkt] = alloc_cols[i].number_input(
+                    f"{mkt} %", 0, 100, _alloc_defaults.get(mkt, 25), key=f"fc_mktg_alloc_{MARKET_KEYS[mkt]}",
+                )
+            alloc_sum = sum(alloc_pcts.values())
+            if alloc_sum != 100:
+                st.error(f"Allocation must sum to 100% (currently {alloc_sum}%)")
+            for mkt in MARKET_NAMES:
+                mkey = MARKET_KEYS[mkt]
+                st.session_state[f"{mkey}_marketing_sqls"] = round(total_mktg * alloc_pcts[mkt] / 100, 1)
+
         st.markdown(
             '<p style="font-weight: 700; font-size: 15px; margin-bottom: 4px;">Segment Assumptions</p>',
             unsafe_allow_html=True,
@@ -1465,6 +1488,25 @@ if st.session_state.app_mode == "Full Company (All Segments)":
     _ai_model_outputs["total_capacity_cost"] = _fc_capacity_cost
     _ai_model_outputs["ending_deferred_revenue"] = phase2_df["deferred_revenue_balance"].iloc[-1]
     _ai_model_outputs["periods"] = list(_fc_annual["period"])
+
+    for mkt in selected_markets:
+        mkt_annual = aggregate_periods(
+            results[mkt]["phase2_df"], results[mkt]["renewals_df"], None,
+            results[mkt]["all_contracts"], num_months, period_months=12,
+        ).rename(columns={"new_arr_booked": "new_arr_live"})
+        for _, mrow in mkt_annual.iterrows():
+            mp = mrow["period"]
+            _ai_model_outputs[f"{mkt}_{mp}_churn_rate_pct"] = mrow.get("gross_dollar_churn_rate_pct")
+            _ai_model_outputs[f"{mkt}_{mp}_churned_arr"] = mrow["churned_arr"]
+            _ai_model_outputs[f"{mkt}_{mp}_churned_logos"] = mrow["churned_logos"]
+            _ai_model_outputs[f"{mkt}_{mp}_beginning_arr"] = mrow["beginning_arr"]
+            _ai_model_outputs[f"{mkt}_{mp}_beginning_logos"] = mrow["beginning_logos"]
+            _ai_model_outputs[f"{mkt}_{mp}_ending_arr"] = mrow["ending_arr"]
+            _ai_model_outputs[f"{mkt}_{mp}_ending_logos"] = mrow["ending_logos"]
+            _ai_model_outputs[f"{mkt}_{mp}_arpa_ending"] = mrow.get("arpa_ending")
+            _ai_model_outputs[f"{mkt}_{mp}_new_arr_live"] = mrow["new_arr_live"]
+            _ai_model_outputs[f"{mkt}_{mp}_expansion_arr"] = mrow["expansion_arr"]
+            _ai_model_outputs[f"{mkt}_{mp}_contraction_arr"] = mrow["contraction_arr"]
 
     _ai_run_context.clear()
     _ai_run_context["mode"] = "Full Company"
@@ -1640,58 +1682,88 @@ if st.session_state.app_mode == "Full Company (All Segments)":
             m3.metric("Customer LTV", f"${latest['ltv']:,.0f}" if latest["ltv"] is not None else "—")
 
         # ---------------------------------------------------------------
-        # Row A: Annual Performance | Key Drivers | ARR Bridge
+        # Row A: Annual Performance table
         # ---------------------------------------------------------------
-        year1_row, latest_forecast_row = annual.iloc[0], annual.iloc[-1]
+        st.markdown("**Annual Performance**")
+        _by_year_labeled = combined_annual.copy()
+        _by_year_labeled["period"] = _by_year_labeled.apply(
+            lambda r: f"{r['period']} ({r['type']})" if pd.notna(r.get("type")) else r["period"], axis=1
+        )
+        _by_year_src = _by_year_labeled.set_index("period")
+        by_year = pd.DataFrame({
+            "Ending ARR": _by_year_src["ending_arr"].apply(_fmt_dollar_scaled),
+            "Recognized Revenue": _by_year_src["revenue"].apply(_fmt_dollar_scaled),
+            "NRR": _by_year_src["nrr_pct"].apply(lambda v: f"{v:.1f}%" if pd.notna(v) else "—"),
+            "Live Accounts": _by_year_src["ending_logos"].apply(lambda v: f"{int(v):,}" if pd.notna(v) else "—"),
+            "Deferred Revenue": _by_year_src["deferred_revenue"].apply(_fmt_dollar_scaled),
+        }).T
+        st.dataframe(_bold_headers(by_year), use_container_width=True)
 
-        def _pct_change(new, old):
-            if old in (None, 0) or pd.isna(old) or pd.isna(new):
-                return None
-            return (new - old) / abs(old) * 100
+        # ---------------------------------------------------------------
+        # Row A2: Two charts side-by-side — Multi-year ARR Waterfall | Market Growth Contribution
+        # ---------------------------------------------------------------
+        chart_a_col, chart_b_col = st.columns(2)
 
-        row_a_col1, row_a_col2, row_a_col3 = st.columns([1.1, 0.7, 1.4])
+        with chart_a_col:
+            num_years = len(annual)
+            if num_years <= 3:
+                st.markdown("**ARR Bridge — Full Horizon**")
+                wf_labels = []
+                wf_values = []
+                wf_measures = []
+                for yi, (_, yr) in enumerate(annual.iterrows()):
+                    if yi == 0:
+                        wf_labels.append(f"Begin")
+                        wf_values.append(yr["beginning_arr"])
+                        wf_measures.append("absolute")
+                    wf_labels += [f"{yr['period']} New", f"{yr['period']} Exp",
+                                  f"{yr['period']} Contr", f"{yr['period']} Churn"]
+                    wf_values += [yr["new_arr_live"], yr["expansion_arr"],
+                                  -yr["contraction_arr"], -yr["churned_arr"]]
+                    wf_measures += ["relative", "relative", "relative", "relative"]
+                    wf_labels.append(f"{yr['period']} End")
+                    wf_values.append(yr["ending_arr"])
+                    wf_measures.append("total")
+                _wf_fig = make_waterfall(wf_labels, wf_values, "", measure=wf_measures)
+                _wf_fig.update_layout(height=350, margin=dict(t=10, b=30, l=40, r=10))
+                st.plotly_chart(_wf_fig, use_container_width=True)
+            else:
+                latest_forecast_row = annual.iloc[-1]
+                st.markdown(f"**ARR Bridge — {latest_forecast_row['period']}**")
+                wf_labels = ["Begin", "New ARR", "Expand", "Contract", "Churn", "Other", "End"]
+                wf_values = [latest_forecast_row["beginning_arr"], latest_forecast_row["new_arr_live"],
+                             latest_forecast_row["expansion_arr"], -latest_forecast_row["contraction_arr"],
+                             -latest_forecast_row["churned_arr"], latest_forecast_row["other_boundary_effect"],
+                             latest_forecast_row["ending_arr"]]
+                _wf_fig = make_waterfall(wf_labels, wf_values, "")
+                _wf_fig.update_layout(height=350, margin=dict(t=10, b=30, l=40, r=10))
+                st.plotly_chart(_wf_fig, use_container_width=True)
 
-        with row_a_col1:
-            st.markdown("**Annual Performance**")
-            _by_year_labeled = combined_annual.copy()
-            _by_year_labeled["period"] = _by_year_labeled.apply(
-                lambda r: f"{r['period']} ({r['type']})" if pd.notna(r.get("type")) else r["period"], axis=1
+        with chart_b_col:
+            st.markdown("**Market Growth Contribution**")
+            _mkt_colors = {"SMB": "#4E79A7", "Mid-Market": "#F28E2B", "Enterprise": "#E15759", "Inbound": "#76B7B2"}
+            growth_fig = go.Figure()
+            for mkt in selected_markets:
+                mkt_annual = aggregate_periods(
+                    results[mkt]["phase2_df"], results[mkt]["renewals_df"], None,
+                    results[mkt]["all_contracts"], num_months, period_months=12,
+                ).rename(columns={"new_arr_booked": "new_arr_live"})
+                net_growth = (mkt_annual["new_arr_live"] + mkt_annual["expansion_arr"]
+                              - mkt_annual["contraction_arr"] - mkt_annual["churned_arr"])
+                hover_texts = [_fmt_dollar_scaled(v) for v in net_growth]
+                growth_fig.add_trace(go.Bar(
+                    name=mkt, x=mkt_annual["period"], y=net_growth,
+                    marker_color=_mkt_colors.get(mkt, "#999"),
+                    customdata=hover_texts,
+                    hovertemplate="%{x}: %{customdata}<extra>" + mkt + "</extra>",
+                ))
+            growth_fig.update_layout(
+                barmode="stack", height=350,
+                margin=dict(t=10, b=30, l=40, r=10),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+                yaxis_tickprefix="$", yaxis_tickformat=",.0s",
             )
-            _by_year_src = _by_year_labeled.set_index("period")
-            by_year = pd.DataFrame({
-                "Ending ARR": _by_year_src["ending_arr"].apply(_fmt_dollar_scaled),
-                "Recognized Revenue": _by_year_src["revenue"].apply(_fmt_dollar_scaled),
-                "NRR": _by_year_src["nrr_pct"].apply(lambda v: f"{v:.1f}%" if pd.notna(v) else "—"),
-                "Live Accounts": _by_year_src["ending_logos"].apply(lambda v: f"{int(v):,}" if pd.notna(v) else "—"),
-                "Deferred Revenue": _by_year_src["deferred_revenue"].apply(_fmt_dollar_scaled),
-            }).T
-            st.dataframe(_bold_headers(by_year), use_container_width=True)
-
-        with row_a_col2:
-            st.markdown(f"**Key Drivers — {latest['period']}**")
-            driver_fields = [
-                ("New Business (ARR)", "new_arr_live"), ("Expansion", "expansion_arr"),
-                ("Contraction", "contraction_arr"), ("Churn", "churned_arr"),
-            ]
-            drivers_rows = []
-            for d_label, d_field in driver_fields:
-                impact = latest_forecast_row[d_field]
-                pct = _pct_change(impact, year1_row[d_field])
-                drivers_rows.append({
-                    "Driver": d_label,
-                    "Impact on ARR": _fmt_dollar_scaled(impact),
-                    "vs Year 1": f"{pct:+.1f}%" if pct is not None else "—",
-                })
-            st.dataframe(_bold_headers(pd.DataFrame(drivers_rows).set_index("Driver")), use_container_width=True)
-
-        with row_a_col3:
-            st.markdown(f"**ARR Bridge — {latest['period']}**")
-            wf_labels = ["Begin", "New ARR", "Expand", "Contract", "Churn", "Other", "End"]
-            wf_values = [latest["beginning_arr"], latest["new_arr_live"], latest["expansion_arr"],
-                         -latest["contraction_arr"], -latest["churned_arr"], latest["other_boundary_effect"], latest["ending_arr"]]
-            _wf_fig = make_waterfall(wf_labels, wf_values, "")
-            _wf_fig.update_layout(height=300, margin=dict(t=10, b=30, l=40, r=10))
-            st.plotly_chart(_wf_fig, use_container_width=True)
+            st.plotly_chart(growth_fig, use_container_width=True)
 
         # ---------------------------------------------------------------
         # Row B: ARR Actuals → Forecast chart | Executive Takeaway
@@ -1769,15 +1841,15 @@ if st.session_state.app_mode == "Full Company (All Segments)":
 
             ending_arr_val = latest["ending_arr"]
             nrr_val = latest["nrr_pct"]
-            new_biz_impact = abs(latest_forecast_row["new_arr_live"]) if pd.notna(latest_forecast_row["new_arr_live"]) else 0
-            expansion_impact = abs(latest_forecast_row["expansion_arr"]) if pd.notna(latest_forecast_row["expansion_arr"]) else 0
+            new_biz_impact = abs(latest["new_arr_live"]) if pd.notna(latest["new_arr_live"]) else 0
+            expansion_impact = abs(latest["expansion_arr"]) if pd.notna(latest["expansion_arr"]) else 0
 
             if new_biz_impact >= expansion_impact:
                 primary_driver_label = "new business"
-                primary_driver_impact = latest_forecast_row["new_arr_live"]
+                primary_driver_impact = latest["new_arr_live"]
             else:
                 primary_driver_label = "expansion"
-                primary_driver_impact = latest_forecast_row["expansion_arr"]
+                primary_driver_impact = latest["expansion_arr"]
 
             if nrr_val is not None and not pd.isna(nrr_val):
                 if nrr_val >= _NRR_STRONG_THRESHOLD:

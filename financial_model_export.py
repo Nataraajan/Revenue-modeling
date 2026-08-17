@@ -74,7 +74,8 @@ def _build_pod_assumptions_column(ws, cfg: dict, col: int, num_months: int) -> d
         if label:
             c = ws.cell(row=r, column=col, value=value)
             c.font = BLUE
-            if isinstance(value, float) and value <= 1.0:
+            _PERCENT_FIELDS = {"win_mkt", "win_bdr", "win_self", "churn", "expansion", "contraction", "exec_eff"}
+            if label in _PERCENT_FIELDS:
                 c.number_format = PCT_FMT
             elif label in ("ae_base", "ae_variable", "ae_quota", "bdr_base", "bdr_variable", "deal_size"):
                 c.number_format = CURRENCY_FMT
