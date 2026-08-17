@@ -304,6 +304,255 @@ def _humanize_key(raw_key: str) -> str | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# COMPREHENSIVE AI DATA REGISTRY
+# One function that walks every dataframe column and produces a flat dict of
+# human-readable key → computed value. This is the single source of truth
+# for the AI assistant's factual-lookup path.
+# ---------------------------------------------------------------------------
+
+_PHASE1_LABELS = {
+    "active_aes": "Active AEs",
+    "active_bdrs": "Active BDRs",
+    "sqls_marketing": "Marketing SQLs",
+    "sqls_bdr": "BDR SQLs",
+    "sqls_ae_self_sourced": "AE Self-Sourced SQLs",
+    "capacity_constrained_bookings": "Capacity-Constrained Bookings ($)",
+    "demand_constrained_bookings": "Demand-Constrained Bookings ($)",
+    "theoretical_bookings": "Theoretical Bookings ($)",
+    "execution_efficiency": "Execution Efficiency",
+    "seasonal_multiplier": "Seasonal Multiplier",
+    "actual_bookings": "Actual Bookings ($)",
+    "overall_attainment_pct": "AE Attainment (%)",
+    "binding_constraint": "Binding Constraint",
+    "pipeline_coverage_ratio": "Pipeline Coverage Ratio",
+    "ae_cost": "AE Cost ($)",
+    "bdr_cost": "BDR Cost ($)",
+    "total_cost_of_capacity": "Total Cost of Capacity ($)",
+    "cost_per_dollar_booked": "Cost per Dollar Booked ($)",
+}
+
+_PHASE2_LABELS = {
+    "new_bookings_tcv": "New Bookings TCV ($)",
+    "new_accounts_signed": "New Accounts Signed",
+    "new_arr_booked": "New ARR Booked ($)",
+    "arpa_new_accounts": "ARPA — New Accounts ($)",
+    "cumulative_accounts_signed": "Cumulative Accounts Signed",
+    "cumulative_arr_booked": "Cumulative ARR Booked ($)",
+    "blended_arpa_booked": "Blended ARPA Booked ($)",
+    "live_accounts": "Live Accounts",
+    "live_arr": "Live ARR ($)",
+    "blended_arpa_live": "Blended ARPA Live ($)",
+    "subscription_billings": "Subscription Billings ($)",
+    "subscription_revenue_recognized": "Subscription Revenue Recognized ($)",
+    "ps_fee_billings": "PS Fee Billings ($)",
+    "ps_fee_revenue_recognized": "PS Fee Revenue Recognized ($)",
+    "total_billings": "Total Billings ($)",
+    "total_revenue_recognized": "Total Revenue Recognized ($)",
+    "cumulative_billings": "Cumulative Billings ($)",
+    "cumulative_revenue_recognized": "Cumulative Revenue Recognized ($)",
+    "deferred_revenue_balance": "Deferred Revenue Balance ($)",
+    "implementation_backlog_value": "Implementation Backlog ($)",
+    "implementation_backlog_count": "Implementation Backlog Count",
+}
+
+_ANNUAL_LABELS = {
+    "beginning_arr": "Beginning ARR ($)",
+    "ending_arr": "Ending ARR ($)",
+    "new_arr_live": "New ARR — Live ($)",
+    "expansion_arr": "Expansion ARR ($)",
+    "contraction_arr": "Contraction ARR ($)",
+    "churned_arr": "Churned ARR ($)",
+    "nrr_pct": "Net Revenue Retention (%)",
+    "gross_dollar_churn_rate_pct": "Gross Dollar Churn Rate (%)",
+    "beginning_logos": "Beginning Logos",
+    "ending_logos": "Ending Logos",
+    "new_logos": "New Logos",
+    "churned_logos": "Churned Logos",
+    "logo_churn_rate_pct": "Logo Churn Rate (%)",
+    "revenue": "Recognized Revenue ($)",
+    "arpa_ending": "ARPA — Ending ($)",
+    "ltv": "Customer LTV ($)",
+    "deferred_revenue": "Deferred Revenue ($)",
+    "other_boundary_effect": "Boundary Reconciliation ($)",
+}
+
+_RENEWALS_LABELS = {
+    "logos_up_for_renewal": "Logos Up for Renewal",
+    "arr_up_for_renewal": "ARR Up for Renewal ($)",
+    "churned_arr": "Churned ARR ($)",
+    "expansion_arr": "Expansion ARR ($)",
+    "contraction_arr": "Contraction ARR ($)",
+    "renewed_arr": "Renewed ARR ($)",
+    "logos_retained_expected": "Logos Retained (Expected)",
+    "churn_rate_applied_pct": "Churn Rate Applied (%)",
+    "nrr_this_cohort_pct": "NRR — This Cohort (%)",
+}
+
+
+def _build_ai_registry(
+    selected_markets: list,
+    results: dict,
+    phase1_df,
+    phase2_df,
+    annual_df,
+    renewals_df,
+    num_months: int,
+    gross_margin_pct: float,
+    capacity_cost: float,
+) -> dict:
+    """Build comprehensive registry of every computed value in the model."""
+    reg = {}
+    reg["mode"] = "Full Company"
+    reg["markets"] = selected_markets
+    reg["num_months"] = num_months
+    reg["gross_margin_pct"] = gross_margin_pct
+    reg["periods"] = list(annual_df["period"])
+
+    # --- Company-wide Phase 1 summaries (annual totals from monthly data) ---
+    num_years = (num_months + 11) // 12
+    for yr in range(num_years):
+        start_m = yr * 12
+        end_m = min((yr + 1) * 12, num_months)
+        yr_slice = phase1_df[(phase1_df["month"] > start_m) & (phase1_df["month"] <= end_m)]
+        period = f"Y{yr + 1}"
+        for col, label in _PHASE1_LABELS.items():
+            if col not in yr_slice.columns:
+                continue
+            if col in ("binding_constraint",):
+                cap_months = (yr_slice["binding_constraint"] == "CAPACITY").sum()
+                reg[f"Company {period} Months Capacity-Bound"] = int(cap_months)
+                dem_months = (yr_slice["binding_constraint"] == "DEMAND").sum()
+                reg[f"Company {period} Months Demand-Bound"] = int(dem_months)
+            elif col in ("overall_attainment_pct", "execution_efficiency", "seasonal_multiplier",
+                         "pipeline_coverage_ratio", "cost_per_dollar_booked"):
+                val = yr_slice[col].mean()
+                if pd.notna(val):
+                    reg[f"Company {period} Avg {label}"] = round(val, 2)
+            elif col in ("active_aes", "active_bdrs"):
+                reg[f"Company {period} End {label}"] = int(yr_slice[col].iloc[-1])
+            else:
+                reg[f"Company {period} Total {label}"] = round(yr_slice[col].sum(), 2)
+
+    # --- Company-wide Phase 2 summaries (annual totals + ending snapshots) ---
+    for yr in range(num_years):
+        start_m = yr * 12
+        end_m = min((yr + 1) * 12, num_months)
+        yr_slice = phase2_df[(phase2_df["month"] > start_m) & (phase2_df["month"] <= end_m)]
+        period = f"Y{yr + 1}"
+        snapshot_cols = {"live_accounts", "live_arr", "blended_arpa_live", "cumulative_accounts_signed",
+                         "cumulative_arr_booked", "blended_arpa_booked", "deferred_revenue_balance",
+                         "implementation_backlog_value", "implementation_backlog_count"}
+        for col, label in _PHASE2_LABELS.items():
+            if col not in yr_slice.columns:
+                continue
+            if col in snapshot_cols:
+                val = yr_slice[col].iloc[-1]
+                if pd.notna(val):
+                    reg[f"Company {period} End {label}"] = round(val, 2) if isinstance(val, float) else val
+            elif col in ("arpa_new_accounts",):
+                val = yr_slice[col].mean()
+                if pd.notna(val):
+                    reg[f"Company {period} Avg {label}"] = round(val, 2)
+            else:
+                reg[f"Company {period} Total {label}"] = round(yr_slice[col].sum(), 2)
+
+    # --- Company-wide Annual aggregation (NRR, churn rates, LTV, etc.) ---
+    for _, row in annual_df.iterrows():
+        period = row["period"]
+        for col, label in _ANNUAL_LABELS.items():
+            val = row.get(col)
+            if val is not None and not (isinstance(val, float) and pd.isna(val)):
+                key = f"Company {period} {label}"
+                reg[key] = round(val, 2) if isinstance(val, float) else val
+
+    # --- Company-wide totals ---
+    reg["Company Total Capacity Cost ($)"] = round(capacity_cost, 2)
+    reg["Company Ending Deferred Revenue ($)"] = round(phase2_df["deferred_revenue_balance"].iloc[-1], 2)
+    reg["Company Total Actual Bookings ($)"] = round(phase1_df["actual_bookings"].sum(), 2)
+    reg["Company Total Revenue Recognized ($)"] = round(phase2_df["total_revenue_recognized"].sum(), 2)
+
+    # --- Per-segment data (phase1, phase2, annual, renewals) ---
+    for mkt in selected_markets:
+        r = results[mkt]
+
+        # Phase 1 per-segment
+        p1 = r["phase1_df"]
+        for yr in range(num_years):
+            start_m = yr * 12
+            end_m = min((yr + 1) * 12, num_months)
+            yr_slice = p1[(p1["month"] > start_m) & (p1["month"] <= end_m)]
+            period = f"Y{yr + 1}"
+            for col, label in _PHASE1_LABELS.items():
+                if col not in yr_slice.columns:
+                    continue
+                if col in ("binding_constraint",):
+                    cap_months = (yr_slice["binding_constraint"] == "CAPACITY").sum()
+                    reg[f"{mkt} {period} Months Capacity-Bound"] = int(cap_months)
+                    dem_months = (yr_slice["binding_constraint"] == "DEMAND").sum()
+                    reg[f"{mkt} {period} Months Demand-Bound"] = int(dem_months)
+                elif col in ("overall_attainment_pct", "execution_efficiency", "seasonal_multiplier",
+                             "pipeline_coverage_ratio", "cost_per_dollar_booked"):
+                    val = yr_slice[col].mean()
+                    if pd.notna(val):
+                        reg[f"{mkt} {period} Avg {label}"] = round(val, 2)
+                elif col in ("active_aes", "active_bdrs"):
+                    reg[f"{mkt} {period} End {label}"] = int(yr_slice[col].iloc[-1])
+                else:
+                    reg[f"{mkt} {period} Total {label}"] = round(yr_slice[col].sum(), 2)
+
+        # Phase 2 per-segment
+        p2 = r["phase2_df"]
+        snapshot_cols = {"live_accounts", "live_arr", "blended_arpa_live", "cumulative_accounts_signed",
+                         "cumulative_arr_booked", "blended_arpa_booked", "deferred_revenue_balance",
+                         "implementation_backlog_value", "implementation_backlog_count"}
+        for yr in range(num_years):
+            start_m = yr * 12
+            end_m = min((yr + 1) * 12, num_months)
+            yr_slice = p2[(p2["month"] > start_m) & (p2["month"] <= end_m)]
+            period = f"Y{yr + 1}"
+            for col, label in _PHASE2_LABELS.items():
+                if col not in yr_slice.columns:
+                    continue
+                if col in snapshot_cols:
+                    val = yr_slice[col].iloc[-1]
+                    if pd.notna(val):
+                        reg[f"{mkt} {period} End {label}"] = round(val, 2) if isinstance(val, float) else val
+                elif col in ("arpa_new_accounts",):
+                    val = yr_slice[col].mean()
+                    if pd.notna(val):
+                        reg[f"{mkt} {period} Avg {label}"] = round(val, 2)
+                else:
+                    reg[f"{mkt} {period} Total {label}"] = round(yr_slice[col].sum(), 2)
+
+        # Annual aggregation per-segment
+        mkt_annual = aggregate_periods(
+            r["phase2_df"], r["renewals_df"], None,
+            r["all_contracts"], num_months, period_months=12,
+            gross_margin_pct=gross_margin_pct,
+        ).rename(columns={"new_arr_booked": "new_arr_live"})
+        for _, mrow in mkt_annual.iterrows():
+            mp = mrow["period"]
+            for col, label in _ANNUAL_LABELS.items():
+                val = mrow.get(col)
+                if val is not None and not (isinstance(val, float) and pd.isna(val)):
+                    reg[f"{mkt} {mp} {label}"] = round(val, 2) if isinstance(val, float) else val
+
+        # Renewal events per-segment
+        rdf = r["renewals_df"]
+        if len(rdf) > 0:
+            total_ren = {col: rdf[col].sum() for col in rdf.columns if col not in ("month", "pod_name")}
+            for col, label in _RENEWALS_LABELS.items():
+                val = total_ren.get(col)
+                if val is not None and not (isinstance(val, float) and pd.isna(val)):
+                    reg[f"{mkt} Total {label}"] = round(val, 2) if isinstance(val, float) else val
+            if total_ren.get("arr_up_for_renewal", 0) > 0:
+                reg[f"{mkt} Blended Renewal NRR (%)"] = round(
+                    100 * total_ren["renewed_arr"] / total_ren["arr_up_for_renewal"], 1)
+
+    return reg
+
+
 def _run_whatif_simulation(overrides: dict) -> dict | None:
     ctx = _ai_run_context
     if not ctx or ctx.get("mode") != "Full Company":
@@ -360,16 +609,17 @@ def _run_whatif_simulation(overrides: dict) -> dict | None:
     )
     annual = annual.rename(columns={"new_arr_booked": "new_arr_live"})
 
-    new_outputs = {}
-    for _, row in annual.iterrows():
-        period = row["period"]
-        new_outputs[f"{period}_ending_arr"] = row["ending_arr"]
-        new_outputs[f"{period}_revenue"] = row["revenue"]
-        new_outputs[f"{period}_nrr_pct"] = row["nrr_pct"]
-        new_outputs[f"{period}_ending_logos"] = row["ending_logos"]
-    new_outputs["total_capacity_cost"] = phase1_df["total_cost_of_capacity"].sum()
-    new_outputs["periods"] = list(annual["period"])
-    return new_outputs
+    return _build_ai_registry(
+        selected_markets=selected,
+        results=results,
+        phase1_df=phase1_df,
+        phase2_df=phase2_df,
+        annual_df=annual,
+        renewals_df=renewals_df,
+        num_months=num_months,
+        gross_margin_pct=gross_margin_pct,
+        capacity_cost=phase1_df["total_cost_of_capacity"].sum(),
+    )
 
 
 def _suffix_to_cfg_field(suffix: str, value) -> tuple | None:
@@ -491,9 +741,9 @@ def _render_ai_fab():
                     "   - If the user doesn't specify a segment, apply the change to ALL segments.",
                     "   - Do NOT add any text before or after the JSON block.",
                     "4. For segment comparison questions (\"which market contributes more to churn\"), present all three lenses from COMPUTED MODEL OUTPUTS, clearly labeled:",
-                    "   - **Highest rate**: each segment's own churn rate (e.g. SMB_Y2_churn_rate_pct).",
+                    "   - **Highest rate**: each segment's own churn rate (e.g. 'SMB Y2 Gross Dollar Churn Rate (%)').",
                     "   - **Biggest contributor to blended rate**: segment's share of total beginning logos × its churn rate.",
-                    "   - **Biggest dollar impact**: churned_arr or churned_logos × ARPA for each segment.",
+                    "   - **Biggest dollar impact**: churned ARR or churned logos × ARPA for each segment.",
                     "   Quote exact numbers from the per-segment outputs — do NOT compute your own.",
                     "5. NEVER produce a table of numbers you calculated yourself. NEVER say \"estimated\" or \"approximately\" for values that exist in the model outputs.",
                     "6. Keep answers under 200 words.",
@@ -577,18 +827,23 @@ def _render_ai_fab():
                 new_periods = new_outputs.get("periods", [])
                 lines.append("| Metric | Period | Current | Simulated | Change |")
                 lines.append("|--------|--------|---------|-----------|--------|")
+                _whatif_metrics = [
+                    ("Ending ARR ($)", "Ending ARR", "dollar"),
+                    ("Recognized Revenue ($)", "Revenue", "dollar"),
+                    ("Net Revenue Retention (%)", "NRR %", "pct"),
+                ]
                 for period in current_periods:
                     if period not in new_periods:
                         continue
-                    for metric, label in [("ending_arr", "Ending ARR"), ("revenue", "Revenue"), ("nrr_pct", "NRR %")]:
-                        cur_val = current.get(f"{period}_{metric}")
-                        new_val = new_outputs.get(f"{period}_{metric}")
+                    for reg_label, display_label, fmt_type in _whatif_metrics:
+                        cur_val = current.get(f"Company {period} {reg_label}")
+                        new_val = new_outputs.get(f"Company {period} {reg_label}")
                         cur_is_nan = cur_val is None or (isinstance(cur_val, float) and pd.isna(cur_val))
                         new_is_nan = new_val is None or (isinstance(new_val, float) and pd.isna(new_val))
                         if cur_is_nan and new_is_nan:
-                            lines.append(f"| {label} | {period} | — | — | — |")
+                            lines.append(f"| {display_label} | {period} | — | — | — |")
                             continue
-                        if metric == "nrr_pct":
+                        if fmt_type == "pct":
                             cur_fmt = f"{cur_val:.1f}%" if not cur_is_nan else "—"
                             new_fmt = f"{new_val:.1f}%" if not new_is_nan else "—"
                             if not cur_is_nan and not new_is_nan:
@@ -605,7 +860,7 @@ def _render_ai_fab():
                                 diff_fmt = f"+{diff_fmt}" if diff >= 0 else f"-{diff_fmt}"
                             else:
                                 diff_fmt = "—"
-                        lines.append(f"| {label} | {period} | {cur_fmt} | {new_fmt} | {diff_fmt} |")
+                        lines.append(f"| {display_label} | {period} | {cur_fmt} | {new_fmt} | {diff_fmt} |")
 
                 lines.append("\n*This is a preview — inputs have not been changed. Adjust in the sidebar to apply.*")
                 return "\n".join(lines)
@@ -1460,53 +1715,17 @@ if st.session_state.app_mode == "Full Company (All Segments)":
     ]
     _fc_capacity_cost = phase1_df["total_cost_of_capacity"].sum()
     _ai_model_outputs.clear()
-    _ai_model_outputs["mode"] = "Full Company"
-    _ai_model_outputs["markets"] = selected_markets
-    _ai_model_outputs["num_months"] = num_months
-    _ai_model_outputs["gross_margin_pct"] = gross_margin_pct
-    for idx, row in _fc_annual.iterrows():
-        period = row["period"]
-        _ai_model_outputs[f"{period}_ending_arr"] = row["ending_arr"]
-        _ai_model_outputs[f"{period}_beginning_arr"] = row["beginning_arr"]
-        _ai_model_outputs[f"{period}_new_arr_live"] = row["new_arr_live"]
-        _ai_model_outputs[f"{period}_expansion_arr"] = row["expansion_arr"]
-        _ai_model_outputs[f"{period}_contraction_arr"] = row["contraction_arr"]
-        _ai_model_outputs[f"{period}_churned_arr"] = row["churned_arr"]
-        _ai_model_outputs[f"{period}_nrr_pct"] = row["nrr_pct"]
-        _ai_model_outputs[f"{period}_revenue"] = row["revenue"]
-        _ai_model_outputs[f"{period}_ending_logos"] = row["ending_logos"]
-        _ai_model_outputs[f"{period}_new_logos"] = row["new_logos"]
-        _ai_model_outputs[f"{period}_churned_logos"] = row["churned_logos"]
-        _ai_model_outputs[f"{period}_deferred_revenue"] = row.get("deferred_revenue")
-        _ai_model_outputs[f"{period}_arpa_ending"] = row.get("arpa_ending")
-        if "ltv" in row:
-            _ai_model_outputs[f"{period}_ltv"] = row["ltv"]
-        if "gross_dollar_churn_rate_pct" in row:
-            _ai_model_outputs[f"{period}_gross_dollar_churn_rate_pct"] = row["gross_dollar_churn_rate_pct"]
-        if "logo_churn_rate_pct" in row:
-            _ai_model_outputs[f"{period}_logo_churn_rate_pct"] = row["logo_churn_rate_pct"]
-    _ai_model_outputs["total_capacity_cost"] = _fc_capacity_cost
-    _ai_model_outputs["ending_deferred_revenue"] = phase2_df["deferred_revenue_balance"].iloc[-1]
-    _ai_model_outputs["periods"] = list(_fc_annual["period"])
-
-    for mkt in selected_markets:
-        mkt_annual = aggregate_periods(
-            results[mkt]["phase2_df"], results[mkt]["renewals_df"], None,
-            results[mkt]["all_contracts"], num_months, period_months=12,
-        ).rename(columns={"new_arr_booked": "new_arr_live"})
-        for _, mrow in mkt_annual.iterrows():
-            mp = mrow["period"]
-            _ai_model_outputs[f"{mkt}_{mp}_churn_rate_pct"] = mrow.get("gross_dollar_churn_rate_pct")
-            _ai_model_outputs[f"{mkt}_{mp}_churned_arr"] = mrow["churned_arr"]
-            _ai_model_outputs[f"{mkt}_{mp}_churned_logos"] = mrow["churned_logos"]
-            _ai_model_outputs[f"{mkt}_{mp}_beginning_arr"] = mrow["beginning_arr"]
-            _ai_model_outputs[f"{mkt}_{mp}_beginning_logos"] = mrow["beginning_logos"]
-            _ai_model_outputs[f"{mkt}_{mp}_ending_arr"] = mrow["ending_arr"]
-            _ai_model_outputs[f"{mkt}_{mp}_ending_logos"] = mrow["ending_logos"]
-            _ai_model_outputs[f"{mkt}_{mp}_arpa_ending"] = mrow.get("arpa_ending")
-            _ai_model_outputs[f"{mkt}_{mp}_new_arr_live"] = mrow["new_arr_live"]
-            _ai_model_outputs[f"{mkt}_{mp}_expansion_arr"] = mrow["expansion_arr"]
-            _ai_model_outputs[f"{mkt}_{mp}_contraction_arr"] = mrow["contraction_arr"]
+    _ai_model_outputs.update(_build_ai_registry(
+        selected_markets=selected_markets,
+        results=results,
+        phase1_df=phase1_df,
+        phase2_df=phase2_df,
+        annual_df=_fc_annual,
+        renewals_df=renewals_df,
+        num_months=num_months,
+        gross_margin_pct=gross_margin_pct,
+        capacity_cost=_fc_capacity_cost,
+    ))
 
     _ai_run_context.clear()
     _ai_run_context["mode"] = "Full Company"
