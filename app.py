@@ -1682,64 +1682,27 @@ if st.session_state.app_mode == "Full Company (All Segments)":
             m3.metric("Customer LTV", f"${latest['ltv']:,.0f}" if latest["ltv"] is not None else "—")
 
         # ---------------------------------------------------------------
-        # Row A: Annual Performance table
+        # Row A: Annual Performance table | Market Growth Contribution
         # ---------------------------------------------------------------
-        st.markdown("**Annual Performance**")
-        _by_year_labeled = combined_annual.copy()
-        _by_year_labeled["period"] = _by_year_labeled.apply(
-            lambda r: f"{r['period']} ({r['type']})" if pd.notna(r.get("type")) else r["period"], axis=1
-        )
-        _by_year_src = _by_year_labeled.set_index("period")
-        by_year = pd.DataFrame({
-            "Ending ARR": _by_year_src["ending_arr"].apply(_fmt_dollar_scaled),
-            "Recognized Revenue": _by_year_src["revenue"].apply(_fmt_dollar_scaled),
-            "NRR": _by_year_src["nrr_pct"].apply(lambda v: f"{v:.1f}%" if pd.notna(v) else "—"),
-            "Live Accounts": _by_year_src["ending_logos"].apply(lambda v: f"{int(v):,}" if pd.notna(v) else "—"),
-            "Deferred Revenue": _by_year_src["deferred_revenue"].apply(_fmt_dollar_scaled),
-        }).T
-        st.dataframe(_bold_headers(by_year), use_container_width=True)
+        row_a_col1, row_a_col2 = st.columns(2)
 
-        # ---------------------------------------------------------------
-        # Row A2: Two charts side-by-side — Multi-year ARR Waterfall | Market Growth Contribution
-        # ---------------------------------------------------------------
-        chart_a_col, chart_b_col = st.columns(2)
+        with row_a_col1:
+            st.markdown("**Annual Performance**")
+            _by_year_labeled = combined_annual.copy()
+            _by_year_labeled["period"] = _by_year_labeled.apply(
+                lambda r: f"{r['period']} ({r['type']})" if pd.notna(r.get("type")) else r["period"], axis=1
+            )
+            _by_year_src = _by_year_labeled.set_index("period")
+            by_year = pd.DataFrame({
+                "Ending ARR": _by_year_src["ending_arr"].apply(_fmt_dollar_scaled),
+                "Recognized Revenue": _by_year_src["revenue"].apply(_fmt_dollar_scaled),
+                "NRR": _by_year_src["nrr_pct"].apply(lambda v: f"{v:.1f}%" if pd.notna(v) else "—"),
+                "Live Accounts": _by_year_src["ending_logos"].apply(lambda v: f"{int(v):,}" if pd.notna(v) else "—"),
+                "Deferred Revenue": _by_year_src["deferred_revenue"].apply(_fmt_dollar_scaled),
+            }).T
+            st.dataframe(_bold_headers(by_year), use_container_width=True)
 
-        with chart_a_col:
-            num_years = len(annual)
-            if num_years <= 3:
-                st.markdown("**ARR Bridge — Full Horizon**")
-                wf_labels = []
-                wf_values = []
-                wf_measures = []
-                for yi, (_, yr) in enumerate(annual.iterrows()):
-                    if yi == 0:
-                        wf_labels.append(f"Begin")
-                        wf_values.append(yr["beginning_arr"])
-                        wf_measures.append("absolute")
-                    wf_labels += [f"{yr['period']} New", f"{yr['period']} Exp",
-                                  f"{yr['period']} Contr", f"{yr['period']} Churn"]
-                    wf_values += [yr["new_arr_live"], yr["expansion_arr"],
-                                  -yr["contraction_arr"], -yr["churned_arr"]]
-                    wf_measures += ["relative", "relative", "relative", "relative"]
-                    wf_labels.append(f"{yr['period']} End")
-                    wf_values.append(yr["ending_arr"])
-                    wf_measures.append("total")
-                _wf_fig = make_waterfall(wf_labels, wf_values, "", measure=wf_measures)
-                _wf_fig.update_layout(height=350, margin=dict(t=10, b=30, l=40, r=10))
-                st.plotly_chart(_wf_fig, use_container_width=True)
-            else:
-                latest_forecast_row = annual.iloc[-1]
-                st.markdown(f"**ARR Bridge — {latest_forecast_row['period']}**")
-                wf_labels = ["Begin", "New ARR", "Expand", "Contract", "Churn", "Other", "End"]
-                wf_values = [latest_forecast_row["beginning_arr"], latest_forecast_row["new_arr_live"],
-                             latest_forecast_row["expansion_arr"], -latest_forecast_row["contraction_arr"],
-                             -latest_forecast_row["churned_arr"], latest_forecast_row["other_boundary_effect"],
-                             latest_forecast_row["ending_arr"]]
-                _wf_fig = make_waterfall(wf_labels, wf_values, "")
-                _wf_fig.update_layout(height=350, margin=dict(t=10, b=30, l=40, r=10))
-                st.plotly_chart(_wf_fig, use_container_width=True)
-
-        with chart_b_col:
+        with row_a_col2:
             st.markdown("**Market Growth Contribution**")
             _mkt_colors = {"SMB": "#4E79A7", "Mid-Market": "#F28E2B", "Enterprise": "#E15759", "Inbound": "#76B7B2"}
             growth_fig = go.Figure()
@@ -1764,6 +1727,43 @@ if st.session_state.app_mode == "Full Company (All Segments)":
                 yaxis_tickprefix="$", yaxis_tickformat=",.0s",
             )
             st.plotly_chart(growth_fig, use_container_width=True)
+
+        # ---------------------------------------------------------------
+        # Row A2: ARR Waterfall (full width)
+        # ---------------------------------------------------------------
+        num_years = len(annual)
+        if num_years <= 3:
+            st.markdown("**ARR Bridge — Full Horizon**")
+            wf_labels = []
+            wf_values = []
+            wf_measures = []
+            for yi, (_, yr) in enumerate(annual.iterrows()):
+                if yi == 0:
+                    wf_labels.append(f"Begin")
+                    wf_values.append(yr["beginning_arr"])
+                    wf_measures.append("absolute")
+                wf_labels += [f"{yr['period']} New", f"{yr['period']} Exp",
+                              f"{yr['period']} Contr", f"{yr['period']} Churn"]
+                wf_values += [yr["new_arr_live"], yr["expansion_arr"],
+                              -yr["contraction_arr"], -yr["churned_arr"]]
+                wf_measures += ["relative", "relative", "relative", "relative"]
+                wf_labels.append(f"{yr['period']} End")
+                wf_values.append(yr["ending_arr"])
+                wf_measures.append("total")
+            _wf_fig = make_waterfall(wf_labels, wf_values, "", measure=wf_measures)
+            _wf_fig.update_layout(height=350, margin=dict(t=10, b=30, l=40, r=10))
+            st.plotly_chart(_wf_fig, use_container_width=True)
+        else:
+            latest_forecast_row = annual.iloc[-1]
+            st.markdown(f"**ARR Bridge — {latest_forecast_row['period']}**")
+            wf_labels = ["Begin", "New ARR", "Expand", "Contract", "Churn", "Other", "End"]
+            wf_values = [latest_forecast_row["beginning_arr"], latest_forecast_row["new_arr_live"],
+                         latest_forecast_row["expansion_arr"], -latest_forecast_row["contraction_arr"],
+                         -latest_forecast_row["churned_arr"], latest_forecast_row["other_boundary_effect"],
+                         latest_forecast_row["ending_arr"]]
+            _wf_fig = make_waterfall(wf_labels, wf_values, "")
+            _wf_fig.update_layout(height=350, margin=dict(t=10, b=30, l=40, r=10))
+            st.plotly_chart(_wf_fig, use_container_width=True)
 
         # ---------------------------------------------------------------
         # Row B: ARR Actuals → Forecast chart | Executive Takeaway
