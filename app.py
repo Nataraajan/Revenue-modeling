@@ -1318,12 +1318,12 @@ if st.session_state.app_mode == "Full Company (All Segments)":
             total_mktg = st.number_input("Total marketing SQLs/mo", 0.0, 2000.0, 48.0,
                                           key="fc_total_mktg_sqls",
                                           help="Total company-wide marketing-sourced SQLs per month, allocated across segments by the percentages below.")
-            _alloc_defaults = {"SMB": 25, "Mid-Market": 25, "Enterprise": 25, "Inbound": 25}
+            _alloc_defaults = {"SMB": 30, "Mid-Market": 30, "Enterprise": 10, "Inbound": 30}
             alloc_cols = st.columns(len(MARKET_NAMES))
             alloc_pcts = {}
             for i, mkt in enumerate(MARKET_NAMES):
                 alloc_pcts[mkt] = alloc_cols[i].number_input(
-                    f"{mkt} %", 0, 100, _alloc_defaults.get(mkt, 25), key=f"fc_mktg_alloc_{MARKET_KEYS[mkt]}",
+                    f"{mkt}\n%", 0, 100, _alloc_defaults.get(mkt, 25), key=f"fc_mktg_alloc_{MARKET_KEYS[mkt]}",
                 )
             alloc_sum = sum(alloc_pcts.values())
             if alloc_sum != 100:
@@ -1687,7 +1687,7 @@ if st.session_state.app_mode == "Full Company (All Segments)":
         row_a_col1, row_a_col2 = st.columns(2)
 
         with row_a_col1:
-            st.markdown("**Annual Performance**")
+            st.markdown('<p style="font-weight:700; font-size:16px; margin-bottom:4px;">Annual Performance</p>', unsafe_allow_html=True)
             _by_year_labeled = combined_annual.copy()
             _by_year_labeled["period"] = _by_year_labeled.apply(
                 lambda r: f"{r['period']} ({r['type']})" if pd.notna(r.get("type")) else r["period"], axis=1
@@ -1700,7 +1700,7 @@ if st.session_state.app_mode == "Full Company (All Segments)":
                 "Live Accounts": _by_year_src["ending_logos"].apply(lambda v: f"{int(v):,}" if pd.notna(v) else "—"),
                 "Deferred Revenue": _by_year_src["deferred_revenue"].apply(_fmt_dollar_scaled),
             }).T
-            st.dataframe(_bold_headers(by_year), use_container_width=True)
+            st.dataframe(_bold_headers(by_year), use_container_width=True, height=250)
 
         with row_a_col2:
             st.markdown("**Market Growth Contribution**")
@@ -1721,7 +1721,7 @@ if st.session_state.app_mode == "Full Company (All Segments)":
                     hovertemplate="%{x}: %{customdata}<extra>" + mkt + "</extra>",
                 ))
             growth_fig.update_layout(
-                barmode="stack", height=350,
+                barmode="stack", height=280,
                 margin=dict(t=10, b=30, l=40, r=10),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
                 yaxis_tickprefix="$", yaxis_tickformat=",.0s",
@@ -1739,9 +1739,10 @@ if st.session_state.app_mode == "Full Company (All Segments)":
             wf_measures = []
             for yi, (_, yr) in enumerate(annual.iterrows()):
                 if yi == 0:
-                    wf_labels.append(f"Begin")
-                    wf_values.append(yr["beginning_arr"])
+                    wf_labels.append(f"{yr['period']} End")
+                    wf_values.append(yr["ending_arr"])
                     wf_measures.append("absolute")
+                    continue
                 wf_labels += [f"{yr['period']} New", f"{yr['period']} Exp",
                               f"{yr['period']} Contr", f"{yr['period']} Churn"]
                 wf_values += [yr["new_arr_live"], yr["expansion_arr"],
